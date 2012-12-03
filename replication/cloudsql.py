@@ -193,12 +193,11 @@ def replicate(kind, cursor, stats):
     else:
         conn = get_connetction()
         cur = conn.cursor()
-        sql = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (table.table_name,
-                                                      ','.join(table.fields.keys()),
+        statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (table.table_name,
+                                                      ','.join(('`%s`' % field for field in table.fields)),
                                                       ','.join(['%s'] * len(table.fields.values())))
 
-        logging.info(sql)
-        cur.executemany(sql, [x.values() for x in entitydicts])
+        cur.executemany(statement, [x.values() for x in entitydicts])
         logging.debug("alle %d geschrieben", len(entitydicts))
         conn.commit()
         cur.close()
