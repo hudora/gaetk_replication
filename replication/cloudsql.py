@@ -11,6 +11,7 @@ Copyright (c) 2012 HUDORA. All rights reserved.
 import collections
 import logging
 import time
+import sys
 from datetime import datetime
 
 import webapp2
@@ -158,9 +159,22 @@ def normalize_entities(elist, table):
     return new_entitydicts
 
 
+def get_listsize(l):
+    """Recursive get the approximate Size of a list of list of strings."""
+    siz = sys.getsizeof(l)
+    if isinstance(l, list):
+        for ele in l:
+            if isinstance(ele, list):
+                siz += get_listsize(ele)
+            else:
+                siz += sys.getsizeof(ele)
+    return siz
+
+
 def replicate(kind, cursor, stats):
     """Drive replication to Google CloudSQL."""
-    batch_size = 100
+    batch_size = stats.get('batch_size', 20)
+    logging.info("batch_size = %d", batch_size)
     start = time.time()
     table = setup_table(kind)
     if cursor:
@@ -197,7 +211,25 @@ def replicate(kind, cursor, stats):
                                                       ','.join(('`%s`' % field for field in table.fields)),
                                                       ','.join(['%s'] * len(table.fields.values())))
 
-        cur.executemany(statement, [x.values() for x in entitydicts])
+        # We want to avoid 'RequestTooLargeError' - the limit seems arround 64 kb
+        thevalues = [x.values() for x in entitydicts]
+        maxsize = 900 * 1024
+        # We try a bigger batch next time
+        if get_listsize(thevalues) < maxsize / 2:
+            stats['batch_size'] = batch_size * 2
+        while thevalues and get_listsize(thevalues) > maxsize:
+            # Write in batches
+            writelist = []
+            writelist.append(thevalues.pop())
+            if get_listsize(thevalues) > maxsize:
+                logging.debug("writing %d bytes", get_listsize(thevalues))
+                cur.executemany(statement, writelist)
+                writelist = []
+
+        # write the rest
+        if thevalues:
+            logging.debug("writing %d bytes", get_listsize(thevalues))
+            cur.executemany(statement, thevalues)
         logging.debug("alle %d geschrieben", len(entitydicts))
         conn.commit()
         cur.close()
