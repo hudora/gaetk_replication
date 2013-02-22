@@ -171,6 +171,18 @@ def get_listsize(l):
     return siz
 
 
+def encode(value):
+    """Encode value for database"""
+    if isinstance(value, str):
+        value = value.decode('utf-8', errors='replace')
+    elif isinstance(value, list):
+        if len(value):
+            return encode(value[0])
+        else:
+            return None
+    return value
+
+
 def replicate(kind, cursor, stats):
     """Drive replication to Google CloudSQL."""
     batch_size = stats.get('batch_size', 20)
@@ -188,11 +200,8 @@ def replicate(kind, cursor, stats):
             parent = ''
         edict = collections.OrderedDict()
         for field, value in entity.items():
-            if isinstance(value, list):
-                logging.info('ignoring %s', value)
-            elif value is not None:
-                if isinstance(value, str):
-                    value = value.decode('utf-8', errors='replace')
+            value = encode(value)
+            if value is not None:
                 edict[field] = unicode(value)
         for field_name, field_value in edict.items():
             synchronize_field(table, field_name, get_type(field_value))
