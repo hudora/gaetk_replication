@@ -132,17 +132,24 @@ def create_field(table_name, field_name, field_type):
     conn = get_connetction()
     cur = conn.cursor()
     if field_type == datetime:
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` DATETIME" % (table_name, field_name))
+        statement = "ALTER TABLE %s ADD COLUMN `%s` DATETIME" % (table_name, field_name)
     elif field_type in (int, long):
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` BIGINT" % (table_name, field_name))
+        statement = "ALTER TABLE %s ADD COLUMN `%s` BIGINT" % (table_name, field_name)
     elif field_type == float:
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` FLOAT" % (table_name, field_name))
+        statement = "ALTER TABLE %s ADD COLUMN `%s` FLOAT" % (table_name, field_name)
     elif field_type == bool:
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` BOOLEAN" % (table_name, field_name))
+        statement = "ALTER TABLE %s ADD COLUMN `%s` BOOLEAN" % (table_name, field_name)
     elif field_type in (str, unicode):
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` VARCHAR(255)" % (table_name, field_name))
-    else:  # str
+        statement = "ALTER TABLE %s ADD COLUMN `%s` VARCHAR(255)" % (table_name, field_name)
+    else:
         raise RuntimeError("unknown field %s %s" % (field_name, field_type))
+
+    try:
+        cur.execute(statement)
+    except rdbms.DatabaseError:
+        logging.error(u'Error while executing statement %r', statement)
+        raise
+
     conn.commit()
     cur.close()
     conn.close()
