@@ -5,7 +5,7 @@ replication/cloudsql.py - Replikation von Daten in eine SQL Datenbank
 
 Extraiert aus huWaWi
 Created by Maximillian Dornseif on 2012-11-12.
-Copyright (c) 2012 HUDORA. All rights reserved.
+Copyright (c) 2012, 2013 HUDORA. All rights reserved.
 """
 
 import collections
@@ -192,8 +192,8 @@ def encode(value):
 
 def replicate(kind, cursor, stats):
     """Drive replication to Google CloudSQL."""
-    batch_size = stats.get('batch_size', 20)
-    logging.info("batch_size = %d", batch_size)
+    batch_size = stats.get('batch_size', 10)
+    logging.debug("batch_size = %d", batch_size)
     start = time.time()
     table = setup_table(kind)
     if cursor:
@@ -223,16 +223,18 @@ def replicate(kind, cursor, stats):
     else:
         conn = get_connetction()
         cur = conn.cursor()
-        statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (table.table_name,
-                                                      ','.join(('`%s`' % field for field in table.fields)),
-                                                      ','.join(['%s'] * len(table.fields.values())))
+        statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
+            table.table_name,
+            ','.join(('`%s`' % field for field in table.fields)),
+            ','.join(['%s'] * len(table.fields.values())))
 
-        # We want to avoid 'RequestTooLargeError' - the limit seems arround 64 kb
+        # We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
         thevalues = [x.values() for x in entitydicts]
         maxsize = 900 * 1024
         # We try a bigger batch next time
         if get_listsize(thevalues) < maxsize / 2:
             stats['batch_size'] = batch_size * 2
+            logging.info("incerasing batch_size to %d", stats['batch_size'])
         while thevalues and get_listsize(thevalues) > maxsize:
             # Write in batches
             writelist = []
@@ -270,7 +272,8 @@ class TaskReplication(webapp2.RequestHandler):
         cursor = self.request.get('cursor', None)
         stats = dict(records=int(self.request.get('records', 0)),
                      time=float(self.request.get('time', 0)),
-                     starttime=int(self.request.get('starttime', time.time())))
+                     starttime=int(self.request.get('starttime', time.time())),
+                     batch_size=int(self.request.get('batch_size', 25)))
         if cursor:
             cursor = datastore_query.Cursor.from_websafe_string(cursor)
         cursor = replicate(kind, cursor, stats)
@@ -292,7 +295,8 @@ class CronReplication(webapp2.RequestHandler):
     def get(self):
         """Wöchentlich von Cron aufzurufen."""
         for kind in get_all_models():
-            taskqueue.add(queue_name=_config.SQL_QUEUE_NAME, url='/gaetk_replication/cloudsql/worker',
+            taskqueue.add(queue_name=_config.SQL_QUEUE_NAME,
+                          url='/gaetk_replication/cloudsql/worker',
                           params=dict(kind=kind))
         self.response.write('ok\n')
 
