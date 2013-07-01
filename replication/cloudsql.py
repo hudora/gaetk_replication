@@ -140,7 +140,7 @@ def create_field(table_name, field_name, field_type):
     elif field_type == bool:
         statement = "ALTER TABLE %s ADD COLUMN `%s` BOOLEAN" % (table_name, field_name)
     elif field_type in (str, unicode):
-        cur.execute("ALTER TABLE %s ADD COLUMN `%s` VARCHAR(200)" % (table_name, field_name))
+        statement = "ALTER TABLE %s ADD COLUMN `%s` VARCHAR(200)" % (table_name, field_name)
     else:
         raise RuntimeError("unknown field %s %s" % (field_name, field_type))
 
