@@ -253,7 +253,7 @@ def replicate(table, kind, cursor, stats):
         conn.close()
         stats['records'] += len(entitydicts)
         stats['time'] += time.time() - start
-        return query.GetCursor().to_websafe_string()
+        return query.GetCursor()
 
 
 class TaskReplication(webapp2.RequestHandler):
@@ -278,12 +278,12 @@ class TaskReplication(webapp2.RequestHandler):
         table = setup_table(kind)
         cursor = replicate(table, kind, cursor, stats)
 
-        params = dict(cursor=cursor, kind=kind)
-        logging.info("%s: bisher %d Records in %.1f s. Laufzeit %d s.",
+        params = dict(cursor=cursor.to_websafe_string(), kind=kind)
+        logging.info(u'%s: bisher %d Records in %.1f s. Laufzeit %d s.',
                      kind, stats['records'], stats['time'],
                      time.time() - stats['starttime'])
         params.update(stats)
-        if cursor:
+        if params['cursor']:
             taskqueue.add(queue_name=_config.SQL_QUEUE_NAME, url=self.request.path,
                           params=params)
         else:
