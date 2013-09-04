@@ -22,6 +22,8 @@ from google.appengine.api import taskqueue
 from google.appengine.datastore import datastore_query
 from google.appengine.ext.db import stats
 
+# We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
+MAXSIZE = 900 * 1024
 
 _config = lib_config.register('gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
@@ -190,12 +192,11 @@ def encode(value):
     return value
 
 
-def replicate(kind, cursor, stats):
+def replicate(table, kind, cursor, stats):
     """Drive replication to Google CloudSQL."""
     batch_size = stats.get('batch_size', 10)
-    logging.debug("batch_size = %d", batch_size)
     start = time.time()
-    table = setup_table(kind)
+
     if cursor:
         query = datastore.Query(kind=kind, cursor=cursor)
     else:
@@ -228,18 +229,16 @@ def replicate(kind, cursor, stats):
             ','.join(('`%s`' % field for field in table.fields)),
             ','.join(['%s'] * len(table.fields.values())))
 
-        # We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
         thevalues = [x.values() for x in entitydicts]
-        maxsize = 900 * 1024
         # We try a bigger batch next time
-        if get_listsize(thevalues) < maxsize / 2:
+        if get_listsize(thevalues) < MAXSIZE / 2:
             stats['batch_size'] = batch_size * 2
             logging.info("incerasing batch_size to %d", stats['batch_size'])
-        while thevalues and get_listsize(thevalues) > maxsize:
+        while thevalues and get_listsize(thevalues) > MAXSIZE:
             # Write in batches
             writelist = []
             writelist.append(thevalues.pop())
-            if get_listsize(thevalues) > maxsize:
+            if get_listsize(thevalues) > MAXSIZE:
                 logging.debug("writing %d bytes", get_listsize(thevalues))
                 cur.executemany(statement, writelist)
                 writelist = []
@@ -276,7 +275,8 @@ class TaskReplication(webapp2.RequestHandler):
                      batch_size=int(self.request.get('batch_size', 25)))
         if cursor:
             cursor = datastore_query.Cursor.from_websafe_string(cursor)
-        cursor = replicate(kind, cursor, stats)
+        table = setup_table(kind)
+        cursor = replicate(table, kind, cursor, stats)
 
         params = dict(cursor=cursor, kind=kind)
         logging.info("%s: bisher %d Records in %.1f s. Laufzeit %d s.",
