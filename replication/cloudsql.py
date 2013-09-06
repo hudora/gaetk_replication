@@ -25,7 +25,7 @@ from google.appengine.ext.db import stats
 # We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
 MAXSIZE = 900 * 1024
 
-_config = lib_config.register('gaetk_replication',
+replication_config = lib_config.register('gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
          SQL_DATABASE_NAME='*unset*',
          SQL_QUEUE_NAME='default',
@@ -47,7 +47,8 @@ def get_all_models():
 
 
 def get_connetction():
-    return rdbms.connect(instance=_config.SQL_INSTANCE_NAME, database=_config.SQL_DATABASE_NAME)
+    return rdbms.connect(instance=replication_config.SQL_INSTANCE_NAME,
+                         database=replication_config.SQL_DATABASE_NAME)
 
 
 class Table:
@@ -261,7 +262,8 @@ class TaskReplication(webapp2.RequestHandler):
     def get(self):
         """Start Task manually."""
         kind = self.request.get('kind')
-        taskqueue.add(queue_name=_config.SQL_QUEUE_NAME, url=self.request.path,
+        taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
+                      url=self.request.path,
                       params=dict(kind=kind))
         self.response.write('ok\n')
 
@@ -284,7 +286,8 @@ class TaskReplication(webapp2.RequestHandler):
                      time.time() - stats['starttime'])
         params.update(stats)
         if params['cursor']:
-            taskqueue.add(queue_name=_config.SQL_QUEUE_NAME, url=self.request.path,
+            taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
+                          url=self.request.path,
                           params=params)
         else:
             logging.info('%s fertig repliziert', kind)
@@ -295,7 +298,7 @@ class CronReplication(webapp2.RequestHandler):
     def get(self):
         """Wöchentlich von Cron aufzurufen."""
         for kind in get_all_models():
-            taskqueue.add(queue_name=_config.SQL_QUEUE_NAME,
+            taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                           url='/gaetk_replication/cloudsql/worker',
                           params=dict(kind=kind))
         self.response.write('ok\n')
