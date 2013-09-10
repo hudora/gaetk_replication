@@ -280,12 +280,12 @@ class TaskReplication(webapp2.RequestHandler):
         table = setup_table(kind)
         cursor = replicate(table, kind, cursor, stats)
 
-        params = dict(cursor=cursor.to_websafe_string(), kind=kind)
         logging.info(u'%s: bisher %d Records in %.1f s. Laufzeit %d s.',
                      kind, stats['records'], stats['time'],
                      time.time() - stats['starttime'])
-        params.update(stats)
-        if params['cursor']:
+        if cursor:
+            params = dict(cursor=cursor.to_websafe_string(), kind=kind)
+            params.update(stats)
             taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                           url=self.request.path,
                           params=params)
