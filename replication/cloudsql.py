@@ -158,15 +158,14 @@ def create_field(table_name, field_name, field_type):
     conn.close()
 
 
-def normalize_entities(elist, table):
-    """Ensure entitydicts all have the same keys in the same order."""
-    new_entitydicts = []
-    for entity in elist:
-        edict = collections.OrderedDict()
-        for name in table.fields.keys():
-            edict[name] = entity.get(name, None)
-        new_entitydicts.append(edict)
-    return new_entitydicts
+def normalize_entities(entitylist, table):
+    """Ensure all entities have all keys of the table in the same order."""
+    entities = []
+    keys = table.fields.keys()
+    for entity in entitylist:
+        tmp = [entity.get(name, None) for name in keys]
+        entities.append(tmp)
+    return entities
 
 
 def get_listsize(l):
@@ -222,44 +221,45 @@ def replicate(table, kind, cursor, stats, **kwargs):
         edict.update(dict(_key=str(entity.key()), _parent=str(parent)))
         entitydicts.append(edict)
 
-    entitydicts = normalize_entities(entitydicts, table)
-
     if not entitydicts:
         stats['time'] += time.time() - start
         return None
-    else:
-        conn = get_connetction()
-        cur = conn.cursor()
-        statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
-            table.table_name,
-            ','.join(('`%s`' % field for field in table.fields)),
-            ','.join(['%s'] * len(table.fields.values())))
 
-        thevalues = [x.values() for x in entitydicts]
-        # We try a bigger batch next time
-        if get_listsize(thevalues) < MAXSIZE / 2:
-            stats['batch_size'] = batch_size * 2
-            logging.info("incerasing batch_size to %d", stats['batch_size'])
-        while thevalues and get_listsize(thevalues) > MAXSIZE:
-            # Write in batches
+    entities = normalize_entities(entitydicts, table)
+
+    conn = get_connetction()
+    cur = conn.cursor()
+    statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
+        table.table_name,
+        ','.join(('`%s`' % field for field in table.fields)),
+        ','.join(['%s'] * len(table.fields.values())))
+
+    # We try a bigger batch next time
+    if get_listsize(entities) < MAXSIZE / 2:
+        stats['batch_size'] = batch_size * 2
+        logging.info("increasing batch_size to %d", stats['batch_size'])
+    while entities and get_listsize(entities) > MAXSIZE:
+        # Write in batches
+        writelist = []
+        writelist.append(entities.pop())
+        if get_listsize(entities) > MAXSIZE:
+            logging.debug(u'writing %d bytes', get_listsize(entities))
+            cur.executemany(statement, writelist)
+            stats['records'] += len(writelist)
             writelist = []
-            writelist.append(thevalues.pop())
-            if get_listsize(thevalues) > MAXSIZE:
-                logging.debug("writing %d bytes", get_listsize(thevalues))
-                cur.executemany(statement, writelist)
-                writelist = []
 
-        # write the rest
-        if thevalues:
-            logging.debug("writing %d bytes", get_listsize(thevalues))
-            cur.executemany(statement, thevalues)
-        logging.debug("alle %d geschrieben", len(entitydicts))
-        conn.commit()
-        cur.close()
-        conn.close()
-        stats['records'] += len(entitydicts)
-        stats['time'] += time.time() - start
-        return query.GetCursor()
+    # write the rest
+    if entities:
+        logging.debug(u'writing %d bytes', get_listsize(entities))
+        cur.executemany(statement, entities)
+        stats['records'] += len(entities)
+
+    conn.commit()
+    cur.close()
+    conn.close()
+
+    stats['time'] += time.time() - start
+    return query.GetCursor()
 
 
 class TaskReplication(webapp2.RequestHandler):
