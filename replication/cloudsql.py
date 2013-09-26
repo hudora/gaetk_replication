@@ -77,17 +77,16 @@ def setup_table(kind):
     else:
         # self.table is missing
         table = Table(kind)
-        sql = """CREATE TABLE %s (_key VARCHAR(255) NOT NULL,
-                                _parent VARCHAR(255),
-                                updated_at TIMESTAMP, PRIMARY KEY(_key))
-               ENGINE MyISAM
-               CHARACTER SET utf8 COLLATE utf8_general_ci""" % table_name
-        logging.info(sql)
-        cur.execute(sql)
+        statement = """CREATE TABLE %s (_key VARCHAR(255) NOT NULL,
+                                        _parent VARCHAR(255),
+                                        updated_at TIMESTAMP, PRIMARY KEY(_key))
+                       ENGINE MyISAM
+                       CHARACTER SET utf8 COLLATE utf8_general_ci""" % table_name
+        cur.execute(statement)
     conn.commit()
     cur.close()
     conn.close()
-    logging.info("Table setup for %s done", kind)
+    logging.info(u'Table setup for %s done', kind)
     return table
 
 
