@@ -32,6 +32,52 @@ replication_config = lib_config.register('gaetk_replication',
          ))
 
 
+def batched(values, max_size=MAXSIZE):
+    """
+    Teile `values` in kleine Häppchen auf.
+
+    Sollte nicht mit einer Liste sondern mit einem Iterator aufgerufen werden,
+    da bei einer Liste ansonsten der erste Batch "undendlich oft" zurückgegeben wird.
+
+    batch(iter(my_list))
+    """
+    while True:
+        batch = []
+        batch.extend(itertools.takewhile(lambda x: get_listsize(batch) < max_size, values))
+        if not batch:
+            return
+        yield batch
+
+
+def sync_lists(listdata):
+    """
+    Synchronisiere Daten aus ListProperties
+
+    Die Daten werden erwartet als dict, mit dem der Datenbankschlüssel des Objekts als Schlüssel
+    und einer Liste der Attributnamen-Wert-Paare als Werte.
+    Beispiel:
+    {'ABCDEF': [('some_field', 'some_value'), ('some_field', 'another_value'), ('another_field', 'foo')]}
+    """
+    connection = get_connetction()
+    cursor = connection.cursor()
+
+    statement = 'DELETE FROM `ListTable` WHERE _key IN (%s)' % (
+        ','.join(("'%s'" % key for key in data.iterkeys())))
+    cursor.execute(statement)
+
+    for batch in batched(data.iteritems()):
+        values = []
+        for key, tmp in batch:
+            values.extend((key, attr, value) for attr, value in tmp)
+
+        statement = 'INSERT INTO `ListTable` (_key, field_name, value) VALUES (%s, %s, %s)'
+        cursor.executemany(statement, values)
+
+    cursor.close()
+    connection.commit()
+    connection.close()
+
+
 def get_all_models():
     """Get list of all datastore models."""
     # Getting datastore statistics is slightly involved. We have to extract a
@@ -206,6 +252,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
             query[property_operator] = value
 
     entitydicts = []
+    listdata = {}
     for entity in query.Get(batch_size):
         parent = entity.key().parent()
         if not parent:
@@ -213,8 +260,14 @@ def replicate(table, kind, cursor, stats, **kwargs):
         edict = collections.OrderedDict()
         for field, value in entity.items():
             value = encode(value)
-            if value is not None:
-                edict[field] = unicode(value)
+
+            if isinstance(value, list):
+                listdata.setdefault(str(entity.key()), []).extend([field, encode(elem)] for elem in value)
+            else:
+                value = encode(value)
+                if value is not None:
+                    edict[field] = unicode(value)
+
         for field_name, field_value in edict.items():
             synchronize_field(table, field_name, get_type(field_value))
         edict.update(dict(_key=str(entity.key()), _parent=str(parent)))
@@ -256,6 +309,9 @@ def replicate(table, kind, cursor, stats, **kwargs):
     conn.commit()
     cur.close()
     conn.close()
+
+    if listdata:
+        sync_lists(listdata)
 
     stats['time'] += time.time() - start
     return query.GetCursor()
