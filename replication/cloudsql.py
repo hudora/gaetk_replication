@@ -193,7 +193,7 @@ def encode(value):
     return value
 
 
-def replicate(table, kind, cursor, stats):
+def replicate(table, kind, cursor, stats, **kwargs):
     """Drive replication to Google CloudSQL."""
     batch_size = stats.get('batch_size', 10)
     start = time.time()
@@ -202,6 +202,11 @@ def replicate(table, kind, cursor, stats):
         query = datastore.Query(kind=kind, cursor=cursor)
     else:
         query = datastore.Query(kind=kind)
+
+    if 'filters' in kwargs:
+        for property_operator, value in kwargs['filters']:
+            query[property_operator] = value
+
     entitydicts = []
     for entity in query.Get(batch_size):
         parent = entity.key().parent()
