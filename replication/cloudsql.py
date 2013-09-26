@@ -55,7 +55,7 @@ class Table:
     """Keeps Infomation on a CloudSQL Table."""
     def __init__(self, kind):
         self.table_name = self.name = kind
-        self.fields = dict(_key=str, updated_at=datetime)
+        self.fields = dict(_key=str, _parent=str, updated_at=datetime)
 
 
 def setup_table(kind):
