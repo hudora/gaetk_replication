@@ -295,14 +295,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
         writelist = []
         writelist.append(entities.pop())
         if get_listsize(entities) > MAXSIZE:
-            logging.debug(u'writing %d bytes', get_listsize(entities))
             cur.executemany(statement, writelist)
             stats['records'] += len(writelist)
             writelist = []
 
     # write the rest
     if entities:
-        logging.debug(u'writing %d bytes', get_listsize(entities))
         cur.executemany(statement, entities)
         stats['records'] += len(entities)
 
