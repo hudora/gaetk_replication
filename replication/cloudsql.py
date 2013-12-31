@@ -15,7 +15,9 @@ import sys
 from datetime import datetime
 
 import webapp2
-from google.appengine.api import datastore, datastore_types
+from google.appengine.api import apiproxy_errors
+from google.appengine.api import datastore
+from google.appengine.api import datastore_types
 from google.appengine.api import lib_config
 from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
@@ -295,13 +297,13 @@ def replicate(table, kind, cursor, stats, **kwargs):
         writelist = []
         writelist.append(entities.pop())
         if get_listsize(entities) > MAXSIZE:
-            cur.executemany(statement, writelist)
+            executemany(cur, statement, entities, retry=True)
             stats['records'] += len(writelist)
             writelist = []
 
     # write the rest
     if entities:
-        cur.executemany(statement, entities)
+        executemany(cur, statement, entities, retry=True)
         stats['records'] += len(entities)
 
     conn.commit()
@@ -313,6 +315,19 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
     stats['time'] += time.time() - start
     return query.GetCursor()
+
+
+def executemany(cursor, statement, entities, retry=True):
+    """Wrapper for cursor.executemany with automatic retry"""
+    try:
+        cur.executemany(statement, entities)
+    except apiproxy_errors.DeadlineExceededError as exception:
+        logging.warn(u'Exception while executing query %r with %d args: %s',
+                     statement, len(entities), exception)
+        if retry:
+            executemany(cursor, statement, entities, retry)
+        else:
+            raise
 
 
 class TaskReplication(webapp2.RequestHandler):
@@ -355,10 +370,20 @@ class CronReplication(webapp2.RequestHandler):
     """Steuerung der Replizierung zu Google CloudSQL."""
     def get(self):
         """Wöchentlich von Cron aufzurufen."""
-        for kind in get_all_models():
+
+        models = self.request.get_all('kind')
+        if not models:
+            models = replication.cloudsql.get_all_models()
+
+        for index, kind in enumerate(models):
+            if kind.startswith('_'):
+                continue
             taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                           url='/gaetk_replication/cloudsql/worker',
-                          params=dict(kind=kind))
+                          params=dict(kind=kind),
+                          name='%s-%s' % (kind, int(time.time())),
+                          countdown=index * 900)
+        self.response.headers['Content-Type'] = 'text/plain'
         self.response.write('ok\n')
 
 
