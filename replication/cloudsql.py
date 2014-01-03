@@ -387,6 +387,17 @@ class CronReplication(webapp2.RequestHandler):
         self.response.write('ok\n')
 
 
+def truncate(tablenames):
+    """Löschen aller Zeilen in einer Tabelle"""
+    connection = get_connetction()
+    cursor = connection.cursor()
+    for tablename in tablenames:
+        cursor.execute('TRUNCATE %s' % tablename)
+    connection.commit()
+    cursor.close()
+    connection.close()
+
+
 # for the python 2.7 runrime application needs to be top-level
 application = webapp2.WSGIApplication([
     (r'^/gaetk_replication/cloudsql/worker$', TaskReplication),
