@@ -15,7 +15,6 @@ import sys
 from datetime import datetime
 
 import webapp2
-from google.appengine.api import apiproxy_errors
 from google.appengine.api import datastore
 from google.appengine.api import datastore_types
 from google.appengine.api import lib_config
@@ -23,6 +22,7 @@ from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
 from google.appengine.datastore import datastore_query
 from google.appengine.ext.db import stats
+from google.appengine.runtime import apiproxy_errors
 
 # We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
 MAXSIZE = 900 * 1024
@@ -320,7 +320,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
 def executemany(cursor, statement, entities, retry=True):
     """Wrapper for cursor.executemany with automatic retry"""
     try:
-        cur.executemany(statement, entities)
+        cursor.executemany(statement, entities)
     except apiproxy_errors.DeadlineExceededError as exception:
         logging.warn(u'Exception while executing query %r with %d args: %s',
                      statement, len(entities), exception)
