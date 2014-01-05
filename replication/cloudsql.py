@@ -245,6 +245,8 @@ def replicate(table, kind, cursor, stats, **kwargs):
     start = time.time()
 
     if cursor:
+        if isinstance(cursor, basestring):
+            cursor = datastore_query.Cursor.from_websafe_string(cursor)
         query = datastore.Query(kind=kind, cursor=cursor)
     else:
         query = datastore.Query(kind=kind)
