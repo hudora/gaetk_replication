@@ -8,6 +8,7 @@ Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013 HUDORA. All rights reserved.
 """
 
+import hashlib
 import collections
 import logging
 import time
@@ -131,8 +132,8 @@ def setup_table(kind):
                        ENGINE MyISAM
                        CHARACTER SET utf8 COLLATE utf8_general_ci""" % table_name
         cur.execute(statement)
-    conn.commit()
     cur.close()
+    conn.commit()
     conn.close()
     logging.info(u'Table setup for %s done', kind)
     return table
@@ -200,8 +201,8 @@ def create_field(table_name, field_name, field_type):
         logging.error(u'Error while executing statement %r', statement)
         raise
 
-    conn.commit()
     cur.close()
+    conn.commit()    
     conn.close()
 
 
@@ -261,7 +262,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
         parent = entity.key().parent()
         if not parent:
             parent = ''
-        edict = collections.OrderedDict()
+        key = str(entity.key())
+        # Ghettofix:
+        if len(key) > 255:
+            key = hashlib.md5(key).hexdigest()
+
+        edict = collections.OrderedDict(_key=key, _parent=str(parent))
         for field, value in entity.items():
             value = encode(value)
 
@@ -274,7 +280,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
         for field_name, field_value in edict.items():
             synchronize_field(table, field_name, get_type(field_value))
-        edict.update(dict(_key=str(entity.key()), _parent=str(parent)))
+
         entitydicts.append(edict)
 
     if not entitydicts:
@@ -282,35 +288,33 @@ def replicate(table, kind, cursor, stats, **kwargs):
         return None
 
     entities = normalize_entities(entitydicts, table)
+    if get_listsize(entities) < MAXSIZE / 2:
+        stats['batch_size'] = batch_size * 2
+        logging.info("increasing batch_size to %d", stats['batch_size'])
 
-    conn = get_connetction()
-    cur = conn.cursor()
     statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
         table.table_name,
         ','.join(('`%s`' % field for field in table.fields)),
         ','.join(['%s'] * len(table.fields.values())))
 
-    # We try a bigger batch next time
-    if get_listsize(entities) < MAXSIZE / 2:
-        stats['batch_size'] = batch_size * 2
-        logging.info("increasing batch_size to %d", stats['batch_size'])
+    connection = get_connetction()
+
     while entities and get_listsize(entities) > MAXSIZE:
         # Write in batches
         writelist = []
         writelist.append(entities.pop())
         if get_listsize(entities) > MAXSIZE:
-            executemany(cur, statement, entities, retry=True)
+            executemany(connection, statement, entities, retry=True)
             stats['records'] += len(writelist)
-            writelist = []
+            del writelist
 
     # write the rest
     if entities:
-        executemany(cur, statement, entities, retry=True)
+        executemany(connection, statement, entities, retry=True)
         stats['records'] += len(entities)
 
-    conn.commit()
-    cur.close()
-    conn.close()
+    connection.commit()
+    connection.close()
 
     if listdata:
         sync_lists(listdata)
@@ -319,15 +323,18 @@ def replicate(table, kind, cursor, stats, **kwargs):
     return query.GetCursor()
 
 
-def executemany(cursor, statement, entities, retry=True):
+def executemany(connection, statement, entities, retry=True):
     """Wrapper for cursor.executemany with automatic retry"""
+
     try:
+        cursor = connection.cursor()
         cursor.executemany(statement, entities)
+        cursor.close()
     except apiproxy_errors.DeadlineExceededError as exception:
         logging.warn(u'Exception while executing query %r with %d args: %s',
                      statement, len(entities), exception)
         if retry:
-            executemany(cursor, statement, entities, retry)
+            executemany(connection, statement, entities, retry)
         else:
             raise
 
@@ -395,8 +402,8 @@ def truncate(tablenames):
     cursor = connection.cursor()
     for tablename in tablenames:
         cursor.execute('TRUNCATE %s' % tablename)
-    connection.commit()
     cursor.close()
+    connection.commit()
     connection.close()
 
 
