@@ -8,7 +8,6 @@ Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013 HUDORA. All rights reserved.
 """
 
-import hashlib
 import collections
 import logging
 import time
@@ -126,7 +125,7 @@ def setup_table(kind):
     else:
         # self.table is missing
         table = Table(kind)
-        statement = """CREATE TABLE %s (_key VARCHAR(255) NOT NULL,
+        statement = """CREATE TABLE %s (_key VARCHAR(255) BINARY NOT NULL,
                                         _parent VARCHAR(255),
                                         updated_at TIMESTAMP, PRIMARY KEY(_key))
                        ENGINE MyISAM
@@ -263,9 +262,6 @@ def replicate(table, kind, cursor, stats, **kwargs):
         if not parent:
             parent = ''
         key = str(entity.key())
-        # Ghettofix:
-        if len(key) > 255:
-            key = hashlib.md5(key).hexdigest()
 
         edict = collections.OrderedDict(_key=key, _parent=str(parent))
         for field, value in entity.items():
