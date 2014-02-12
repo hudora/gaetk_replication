@@ -117,7 +117,7 @@ def setup_table(kind):
         # start with empty definition
         table = Table(kind)
         # add table fields
-        cur.execute('SHOW COLUMNS FROM %s' % table_name)
+        cur.execute('SHOW COLUMNS FROM `%s`' % table_name)
         for col in cur.fetchall():
             field_name = col[0]
             field_type = col[1]
@@ -125,9 +125,9 @@ def setup_table(kind):
     else:
         # self.table is missing
         table = Table(kind)
-        statement = """CREATE TABLE %s (_key VARCHAR(255) BINARY NOT NULL,
-                                        _parent VARCHAR(255),
-                                        updated_at TIMESTAMP, PRIMARY KEY(_key))
+        statement = """CREATE TABLE `%s` (_key VARCHAR(255) BINARY NOT NULL PRIMARY KEY,
+                                          _parent VARCHAR(255),
+                                          updated_at TIMESTAMP)
                        ENGINE MyISAM
                        CHARACTER SET utf8 COLLATE utf8_general_ci""" % table_name
         cur.execute(statement)
@@ -182,15 +182,15 @@ def create_field(table_name, field_name, field_type):
     conn = get_connetction()
     cur = conn.cursor()
     if field_type == datetime:
-        statement = "ALTER TABLE %s ADD COLUMN `%s` DATETIME" % (table_name, field_name)
+        statement = "ALTER TABLE `%s` ADD COLUMN `%s` DATETIME" % (table_name, field_name)
     elif field_type in (int, long):
-        statement = "ALTER TABLE %s ADD COLUMN `%s` BIGINT" % (table_name, field_name)
+        statement = "ALTER TABLE `%s` ADD COLUMN `%s` BIGINT" % (table_name, field_name)
     elif field_type == float:
-        statement = "ALTER TABLE %s ADD COLUMN `%s` FLOAT" % (table_name, field_name)
+        statement = "ALTER TABLE `%s` ADD COLUMN `%s` FLOAT" % (table_name, field_name)
     elif field_type == bool:
-        statement = "ALTER TABLE %s ADD COLUMN `%s` BOOLEAN" % (table_name, field_name)
+        statement = "ALTER TABLE `%s` ADD COLUMN `%s` BOOLEAN" % (table_name, field_name)
     elif field_type in (str, unicode):
-        statement = "ALTER TABLE %s ADD COLUMN `%s` VARCHAR(200)" % (table_name, field_name)
+        statement = "ALTER TABLE `%s` ADD COLUMN `%s` VARCHAR(200)" % (table_name, field_name)
     else:
         raise RuntimeError("unknown field %s %s" % (field_name, field_type))
 
