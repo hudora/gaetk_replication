@@ -5,11 +5,12 @@ replication/cloudsql.py - Replikation von Daten in eine SQL Datenbank
 
 Extraiert aus huWaWi
 Created by Maximillian Dornseif on 2012-11-12.
-Copyright (c) 2012, 2013 HUDORA. All rights reserved.
+Copyright (c) 2012, 2013, 2014 HUDORA. All rights reserved.
 """
 
 import collections
 import logging
+import itertools
 import time
 import sys
 from datetime import datetime
@@ -201,7 +202,7 @@ def create_field(table_name, field_name, field_type):
         raise
 
     cur.close()
-    conn.commit()    
+    conn.commit()
     conn.close()
 
 
@@ -300,9 +301,16 @@ def replicate(table, kind, cursor, stats, **kwargs):
         writelist = []
         writelist.append(entities.pop())
         if get_listsize(entities) > MAXSIZE:
-            executemany(connection, statement, entities, retry=True)
-            stats['records'] += len(writelist)
-            del writelist
+            try:
+                executemany(connection, statement, entities, retry=True)
+                stats['records'] += len(writelist)
+                del writelist
+            except rdbms.InternalError, msg:
+                logging.warning("rdbmsPRoblem: %s", msg)
+                connection.commit()
+                connection.close()
+                connection = get_connetction()
+
 
     # write the rest
     if entities:
