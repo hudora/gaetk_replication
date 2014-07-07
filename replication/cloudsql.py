@@ -311,12 +311,11 @@ def replicate(table, kind, cursor, stats, **kwargs):
                 executemany(connection, statement, entities, retry=True)
                 stats['records'] += len(writelist)
                 del writelist
-            except rdbms.InternalError, msg:
+            except (rdbms.InternalError, rdbms.IntegrityError), msg:
                 logging.warning("rdbmsPRoblem: %s", msg)
                 connection.commit()
                 connection.close()
                 connection = get_connetction()
-
 
     # write the rest
     if entities:
