@@ -13,6 +13,7 @@ import logging
 import itertools
 import time
 import sys
+import warnings
 from datetime import datetime
 
 import webapp2
@@ -83,6 +84,11 @@ def sync_lists(listdata):
 
 def get_all_models():
     """Get list of all datastore models."""
+
+    warnings.warn(
+        "replication.get_all_datastore_kinds() ist besser geeignet",
+        DeprecationWarning, stacklevel=2)
+
     # Getting datastore statistics is slightly involved. We have to extract a
     # timestamp from `stats.GlobalStat.all().get()` and use that to access `stats.KindStat`:
     global_stat = stats.GlobalStat.all().get()
