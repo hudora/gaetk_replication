@@ -7,7 +7,6 @@ Extraiert aus huWaWi
 Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013, 2014 HUDORA. All rights reserved.
 """
-
 import collections
 import logging
 import itertools
@@ -16,6 +15,7 @@ import sys
 import warnings
 from datetime import datetime
 
+import replication
 import webapp2
 from google.appengine.api import datastore
 from google.appengine.api import datastore_types
@@ -23,11 +23,11 @@ from google.appengine.api import lib_config
 from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
 from google.appengine.datastore import datastore_query
-from google.appengine.ext.db import stats
 from google.appengine.runtime import apiproxy_errors
 
-# We want to avoid 'RequestTooLargeError' - the limit seems arround 1 MB
-MAXSIZE = 900 * 1024
+
+# We want to avoid 'RequestTooLargeError' - the limit is 16 MB
+MAXSIZE = 4 * 1024 * 1024
 
 replication_config = lib_config.register('gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
@@ -66,10 +66,10 @@ def sync_lists(listdata):
     cursor = connection.cursor()
 
     statement = 'DELETE FROM `ListTable` WHERE _key IN (%s)' % (
-        ','.join(("'%s'" % key for key in data.iterkeys())))
+        ','.join(("'%s'" % key for key in listdata.iterkeys())))
     cursor.execute(statement)
 
-    for batch in batched(data.iteritems()):
+    for batch in batched(listdata.iteritems()):
         values = []
         for key, tmp in batch:
             values.extend((key, attr, value) for attr, value in tmp)
@@ -82,49 +82,47 @@ def sync_lists(listdata):
     connection.close()
 
 
-def get_all_models():
-    """Get list of all datastore models."""
-
-    warnings.warn(
-        "replication.get_all_datastore_kinds() ist besser geeignet",
-        DeprecationWarning, stacklevel=2)
-
-    # Getting datastore statistics is slightly involved. We have to extract a
-    # timestamp from `stats.GlobalStat.all().get()` and use that to access `stats.KindStat`:
-    global_stat = stats.GlobalStat.all().get()
-    if global_stat:
-        timestamp = global_stat.timestamp
-        ret = []
-        for kindstat in stats.KindStat.all().filter("timestamp =", timestamp).fetch(200):
-            if kindstat.kind_name and not kindstat.kind_name.startswith('__'):
-                ret.append(kindstat.kind_name)
-    return ret
-
-
 def get_connetction():
     return rdbms.connect(instance=replication_config.SQL_INSTANCE_NAME,
                          database=replication_config.SQL_DATABASE_NAME)
 
 
-class Table:
+class Table(object):
     """Keeps Infomation on a CloudSQL Table."""
     def __init__(self, kind):
-        self.table_name = self.name = kind
+        self.name = kind
         self.fields = dict(_key=str, _parent=str, updated_at=datetime)
+
+    def synchronize_field(self, field_name, value):
+        """Add field to table"""
+        if field_name not in self.fields:
+            field_type = get_type(value)
+            self.fields[field_name] = field_type
+            create_field(self.name, field_name, field_type)
+
+    def get_replace_statement(self):
+        return 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
+            self.name,
+            ','.join(('`%s`' % field for field in self.fields)),
+            ','.join(['%s'] * len(self.fields)))
+
+    def normalize_entities(self, entitylist, default=''):
+        """Ensure all entities have all keys"""
+        keys = self.fields.keys()
+        return [[entity.get(name, default) for name in keys] for entity in entitylist]
 
 
 def setup_table(kind):
     """Set-Up destination table."""
-    table_name = kind
     conn = get_connetction()
     cur = conn.cursor()
     # retrieve table metadata if available
-    cur.execute('SHOW tables LIKE "%s"' % table_name)
+    cur.execute('SHOW tables LIKE "%s"' % kind)
     if cur.fetchone():  # table exist
         # start with empty definition
         table = Table(kind)
         # add table fields
-        cur.execute('SHOW COLUMNS FROM `%s`' % table_name)
+        cur.execute('SHOW COLUMNS FROM `%s`' % kind)
         for col in cur.fetchall():
             field_name = col[0]
             field_type = col[1]
@@ -136,7 +134,7 @@ def setup_table(kind):
                                           _parent VARCHAR(255),
                                           updated_at TIMESTAMP)
                        ENGINE MyISAM
-                       CHARACTER SET utf8 COLLATE utf8_general_ci""" % table_name
+                       CHARACTER SET utf8 COLLATE utf8_general_ci""" % kind
         cur.execute(statement)
     cur.close()
     conn.commit()
@@ -147,41 +145,19 @@ def setup_table(kind):
 
 def get_type(value):
     """Datastore to Plain-Python Type Mapping"""
-    ret = None
+
     if isinstance(value, datetime):
-        ret = datetime
-    elif isinstance(value, bool):
-        ret = bool
-    elif isinstance(value, long):
-        ret = long
-    elif isinstance(value, float):
-        ret = float
-    elif isinstance(value, int):
-        ret = int
-    elif isinstance(value, unicode):
-        ret = unicode
-    elif isinstance(value, str):
-        ret = unicode
+        return datetime
+    elif isinstance(value, (bool, long, int, float)):
+        return type(value)
+    elif isinstance(value, (str, unicode)):
+        return unicode
     elif isinstance(value, datastore_types.Text):
-        ret = unicode
+        return unicode
     elif isinstance(value, datastore_types.Key):
-        ret = str
-    #elif isinstance(value, datastore_types.Blob):
-    #    return str
-    #else:
-    #    return str
-    #return None
-    if not ret:
+        return str
+    else:
         raise RuntimeError("unknown type %s %s" % (value, type(value)))
-    return ret
-
-
-def synchronize_field(table, field_name, field_type):
-    """Ensure that the CloudSQL Table has all Columns we need."""
-    if field_name not in table.fields:
-        # table doesn't have this field yet - add it
-        create_field(table.name, field_name, field_type)
-        table.fields[field_name] = field_type
 
 
 def create_field(table_name, field_name, field_type):
@@ -212,43 +188,56 @@ def create_field(table_name, field_name, field_type):
     conn.close()
 
 
-def normalize_entities(entitylist, table):
-    """Ensure all entities have all keys of the table in the same order."""
-    entities = []
-    keys = table.fields.keys()
-    for entity in entitylist:
-        tmp = [entity.get(name, None) for name in keys]
-        entities.append(tmp)
-    return entities
-
-
-def get_listsize(l):
-    """Recursive get the approximate Size of a list of list of strings."""
-    siz = sys.getsizeof(l)
-    if isinstance(l, list):
-        for ele in l:
-            if isinstance(ele, list):
-                siz += get_listsize(ele)
+def get_listsize(obj):
+    """Recursive get the approximate size of a list of list of strings."""
+    size = sys.getsizeof(obj)
+    if isinstance(obj, list):
+        for element in obj:
+            if isinstance(element, list):
+                size += get_listsize(element)
             else:
-                siz += sys.getsizeof(ele)
-    return siz
+                size += sys.getsizeof(element)
+    return size
 
 
 def encode(value):
     """Encode value for database"""
     if isinstance(value, str):
         value = value.decode('utf-8', errors='replace')
-    elif isinstance(value, list):
-        if len(value):
-            return encode(value[0])
-        else:
-            return None
     return value
+
+
+def create_entity(entity):
+    parent = entity.key().parent()
+    if not parent:
+        parent = ''
+    return collections.OrderedDict(_key=str(entity.key()), _parent=str(parent))
+
+
+def entity_list_generator(iterable, table):
+    """
+    Generator that yields entities as dicts.
+
+    Should only be used for models without ListProperties,
+    instead of the whole list, only the first element is used.
+    """
+    for entity in iterable:
+        edict = create_entity(entity)
+        for field, value in entity.items():
+            if isinstance(value, list):
+                if value:
+                    value = value[0]
+                else:
+                    value = ''
+
+            edict[field] = unicode(encode(value))
+            table.synchronize_field(field, value)
+        yield edict
 
 
 def replicate(table, kind, cursor, stats, **kwargs):
     """Drive replication to Google CloudSQL."""
-    batch_size = stats.get('batch_size', 10)
+
     start = time.time()
 
     if cursor:
@@ -262,90 +251,74 @@ def replicate(table, kind, cursor, stats, **kwargs):
         for property_operator, value in kwargs['filters']:
             query[property_operator] = value
 
-    entitydicts = []
+    batch_size = stats.get('batch_size', 10)
+    query_iterator = query.Run(limit=batch_size, offset=0)
     listdata = {}
-    for entity in query.Get(batch_size):
-        parent = entity.key().parent()
-        if not parent:
-            parent = ''
-        key = str(entity.key())
 
-        edict = collections.OrderedDict(_key=key, _parent=str(parent))
-        for field, value in entity.items():
-            value = encode(value)
+    if kwargs.get('use_generator'):
+        entitydicts = entity_list_generator(query_iterator, table)
+    else:
+        entitydicts = []
+        for entity in query_iterator:
+            edict = create_entity(entity)
+            # Ohne dieses Listengeraffel wäre es hier möglich, einen Generator zu benutzen. Schade.
+            for field, value in entity.items():
+                if isinstance(value, list):
+                    listdata.setdefault(edict['key'], []).extend([field, encode(elem)] for elem in value)
+                else:
+                    edict[field] = unicode(encode(value))
+                    table.synchronize_field(field, value)
+            entitydicts.append(edict)
 
-            if isinstance(value, list):
-                listdata.setdefault(str(entity.key()), []).extend([field, encode(elem)] for elem in value)
-            else:
-                value = encode(value)
-                if value is not None:
-                    edict[field] = unicode(value)
-
-        for field_name, field_value in edict.items():
-            synchronize_field(table, field_name, get_type(field_value))
-
-        entitydicts.append(edict)
-
-    if not entitydicts:
+    entities = table.normalize_entities(entitydicts)
+    if not entities:
         stats['time'] += time.time() - start
         return None
 
-    entities = normalize_entities(entitydicts, table)
-    if get_listsize(entities) < MAXSIZE / 2:
-        stats['batch_size'] = batch_size * 2
-        logging.info("increasing batch_size to %d", stats['batch_size'])
-
-    statement = 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
-        table.table_name,
-        ','.join(('`%s`' % field for field in table.fields)),
-        ','.join(['%s'] * len(table.fields.values())))
-
-    connection = get_connetction()
-
-    while entities and get_listsize(entities) > MAXSIZE:
-        # Write in batches
-        writelist = []
-        writelist.append(entities.pop())
-        if get_listsize(entities) > MAXSIZE:
-            try:
-                executemany(connection, statement, entities, retry=True)
-                stats['records'] += len(writelist)
-                del writelist
-            except (rdbms.InternalError, rdbms.IntegrityError), msg:
-                logging.warning("rdbmsPRoblem: %s", msg)
-                connection.commit()
-                connection.close()
-                connection = get_connetction()
-
-    # write the rest
-    if entities:
-        executemany(connection, statement, entities, retry=True)
+    # MAXSIZE is chosen very conservativly.
+    # Even if a batch is larger, it's probably not too large
+    # for a single write call.
+    try:
+        executemany(table.get_replace_statement(), entities, retry=True)
         stats['records'] += len(entities)
-
-    connection.commit()
-    connection.close()
+    except (rdbms.InternalError, rdbms.IntegrityError), msg:
+        logging.warning(u'Caught RDBMS exception: %s', msg)
 
     if listdata:
         sync_lists(listdata)
+
+    # Adapt batch size. This could be further optimized in the future,
+    # like adapting it to a ratio of size and MAXSIZE.
+    size = get_listsize(entities)
+    if size * 2 < MAXSIZE:
+        stats['batch_size'] = batch_size * 2
+        logging.info(u'increasing batch_size to %d', stats['batch_size'])
+    elif size > MAXSIZE:
+        stats['batch_size'] = int(batch_size * 0.8)
 
     stats['time'] += time.time() - start
     return query.GetCursor()
 
 
-def executemany(connection, statement, entities, retry=True):
+def executemany(statement, entities, retry=True):
     """Wrapper for cursor.executemany with automatic retry"""
 
+    connection = get_connetction()
+    cursor = connection.cursor()
     try:
-        cursor = connection.cursor()
         cursor.executemany(statement, entities)
-        cursor.close()
+
     except apiproxy_errors.DeadlineExceededError as exception:
         logging.warn(u'Exception while executing query %r with %d args: %s',
                      statement, len(entities), exception)
         if retry:
-            executemany(connection, statement, entities, retry)
+            executemany(statement, entities, retry)
         else:
             raise
+
+    cursor.close()
+    connection.commit()
+    connection.close()
 
 
 class TaskReplication(webapp2.RequestHandler):
@@ -391,7 +364,7 @@ class CronReplication(webapp2.RequestHandler):
 
         models = self.request.get_all('kind')
         if not models:
-            models = replication.cloudsql.get_all_models()
+            models = replication.get_all_models()
 
         for index, kind in enumerate(models):
             if kind.startswith('_'):
@@ -405,18 +378,7 @@ class CronReplication(webapp2.RequestHandler):
         self.response.write('ok\n')
 
 
-def truncate(tablenames):
-    """Löschen aller Zeilen in einer Tabelle"""
-    connection = get_connetction()
-    cursor = connection.cursor()
-    for tablename in tablenames:
-        cursor.execute('TRUNCATE %s' % tablename)
-    cursor.close()
-    connection.commit()
-    connection.close()
-
-
-# for the python 2.7 runrime application needs to be top-level
+# for the python 2.7 runtime application needs to be top-level
 application = webapp2.WSGIApplication([
     (r'^/gaetk_replication/cloudsql/worker$', TaskReplication),
     (r'^/gaetk_replication/cloudsql/cron$', CronReplication),
