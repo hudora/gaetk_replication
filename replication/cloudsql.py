@@ -27,7 +27,7 @@ from google.appengine.runtime import apiproxy_errors
 
 
 # We want to avoid 'RequestTooLargeError' - the limit is 16 MB
-MAXSIZE = 4 * 1024 * 1024
+MAXSIZE = 6 * 1024 * 1024
 
 replication_config = lib_config.register('gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
@@ -96,9 +96,10 @@ class Table(object):
     def synchronize_field(self, field_name, value):
         """Add field to table"""
         if field_name not in self.fields:
-            field_type = get_type(value)
-            self.fields[field_name] = field_type
-            create_field(self.name, field_name, field_type)
+            if value is not None:
+                field_type = get_type(value)
+                create_field(self.name, field_name, field_type)
+                self.fields[field_name] = field_type
 
     def get_replace_statement(self):
         return 'REPLACE INTO `%s` (%s) VALUES (%s)' % (
@@ -255,7 +256,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
     query_iterator = query.Run(limit=batch_size, offset=0)
     listdata = {}
 
-    if kwargs.get('use_generator'):
+    if kwargs.get('use_generator', True):
         entitydicts = entity_list_generator(query_iterator, table)
     else:
         entitydicts = []
@@ -264,7 +265,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
             # Ohne dieses Listengeraffel wäre es hier möglich, einen Generator zu benutzen. Schade.
             for field, value in entity.items():
                 if isinstance(value, list):
-                    listdata.setdefault(edict['key'], []).extend([field, encode(elem)] for elem in value)
+                    listdata.setdefault(edict['_key'], []).extend([field, encode(elem)] for elem in value)
                 else:
                     edict[field] = unicode(encode(value))
                     table.synchronize_field(field, value)
