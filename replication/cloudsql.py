@@ -12,7 +12,6 @@ import logging
 import itertools
 import time
 import sys
-import warnings
 from datetime import datetime
 
 import replication
@@ -22,8 +21,8 @@ from google.appengine.api import datastore_types
 from google.appengine.api import lib_config
 from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
+from google.appengine.api import users
 from google.appengine.datastore import datastore_query
-from google.appengine.runtime import apiproxy_errors
 
 
 # We want to avoid 'RequestTooLargeError' - the limit is 16 MB
@@ -62,29 +61,42 @@ def sync_lists(listdata):
     Beispiel:
     {'ABCDEF': [('some_field', 'some_value'), ('some_field', 'another_value'), ('another_field', 'foo')]}
     """
-    connection = get_connetction()
-    cursor = connection.cursor()
 
-    statement = 'DELETE FROM `ListTable` WHERE _key IN (%s)' % (
-        ','.join(("'%s'" % key for key in listdata.iterkeys())))
-    cursor.execute(statement)
+    with DatabaseCursor() as cursor:
+        statement = 'DELETE FROM `ListTable` WHERE _key IN (%s)' % (
+            ','.join(("'%s'" % key for key in listdata.iterkeys())))
+        cursor.execute(statement)
 
-    for batch in batched(listdata.iteritems()):
-        values = []
-        for key, tmp in batch:
-            values.extend((key, attr, value) for attr, value in tmp)
-
-        statement = 'INSERT INTO `ListTable` (_key, field_name, value) VALUES (%s, %s, %s)'
-        cursor.executemany(statement, values)
-
-    cursor.close()
-    connection.commit()
-    connection.close()
+        for batch in batched(listdata.iteritems()):
+            values = []
+            for key, tmp in batch:
+                values.extend((key, attr, value) for attr, value in tmp)
+            statement = 'INSERT INTO `ListTable` (_key, field_name, value) VALUES (%s, %s, %s)'
+            cursor.executemany(statement, values)
 
 
-def get_connetction():
-    return rdbms.connect(instance=replication_config.SQL_INSTANCE_NAME,
-                         database=replication_config.SQL_DATABASE_NAME)
+def get_connection():
+    """
+    Create a connection to database
+
+    The connection needs to be closed afterwards.
+    """
+    return rdbms.connect(
+        instance=replication_config.SQL_INSTANCE_NAME, database=replication_config.SQL_DATABASE_NAME)
+
+
+class DatabaseCursor(object):
+    """Context Manager for connection to Google Cloud SQL"""
+    def __enter__(self):
+        self.connection = get_connection()
+        self.cursor = self.connection.cursor()
+        return self.cursor
+
+    def __exit__(self, exctype, value, traceback):
+        if exctype is None:
+            self.cursor.close()
+            self.connection.commit()
+        self.connection.close()
 
 
 class Table(object):
@@ -115,32 +127,24 @@ class Table(object):
 
 def setup_table(kind):
     """Set-Up destination table."""
-    conn = get_connetction()
-    cur = conn.cursor()
-    # retrieve table metadata if available
-    cur.execute('SHOW tables LIKE "%s"' % kind)
-    if cur.fetchone():  # table exist
-        # start with empty definition
-        table = Table(kind)
-        # add table fields
-        cur.execute('SHOW COLUMNS FROM `%s`' % kind)
-        for col in cur.fetchall():
-            field_name = col[0]
-            field_type = col[1]
-            table.fields[field_name] = field_type
-    else:
-        # self.table is missing
-        table = Table(kind)
-        statement = """CREATE TABLE `%s` (_key VARCHAR(255) BINARY NOT NULL PRIMARY KEY,
-                                          _parent VARCHAR(255),
-                                          updated_at TIMESTAMP)
-                       ENGINE MyISAM
-                       CHARACTER SET utf8 COLLATE utf8_general_ci""" % kind
-        cur.execute(statement)
-    cur.close()
-    conn.commit()
-    conn.close()
-    logging.info(u'Table setup for %s done', kind)
+
+    table = Table(kind)
+
+    with DatabaseCursor() as cursor:
+        cursor.execute('SHOW tables LIKE "%s"' % kind)
+        if cursor.fetchone():
+            cursor.execute('SHOW COLUMNS FROM `%s`' % kind)
+            for column in cursor.fetchall():
+                field_name = column[0]
+                table.fields[field_name] = column[1]
+        else:
+            statement = """CREATE TABLE `%s` (_key VARCHAR(255) BINARY NOT NULL PRIMARY KEY,
+                                              _parent VARCHAR(255),
+                                              updated_at TIMESTAMP)
+                           ENGINE MyISAM
+                           CHARACTER SET utf8 COLLATE utf8_general_ci""" % kind
+            cursor.execute(statement)
+
     return table
 
 
@@ -157,14 +161,15 @@ def get_type(value):
         return unicode
     elif isinstance(value, datastore_types.Key):
         return str
+    elif isinstance(value, users.User):
+        return str
     else:
         raise RuntimeError("unknown type %s %s" % (value, type(value)))
 
 
 def create_field(table_name, field_name, field_type):
     """Create a Row in CloudSQL based on Datastore Datatype."""
-    conn = get_connetction()
-    cur = conn.cursor()
+
     if field_type == datetime:
         statement = "ALTER TABLE `%s` ADD COLUMN `%s` DATETIME" % (table_name, field_name)
     elif field_type in (int, long):
@@ -178,15 +183,12 @@ def create_field(table_name, field_name, field_type):
     else:
         raise RuntimeError("unknown field %s %s" % (field_name, field_type))
 
-    try:
-        cur.execute(statement)
-    except rdbms.DatabaseError:
-        logging.error(u'Error while executing statement %r', statement)
-        raise
-
-    cur.close()
-    conn.commit()
-    conn.close()
+    with DatabaseCursor() as cursor:
+        try:
+            cursor.execute(statement)
+        except rdbms.DatabaseError:
+            logging.error(u'Error while executing statement %r', statement)
+            raise
 
 
 def get_listsize(obj):
@@ -204,7 +206,7 @@ def get_listsize(obj):
 def encode(value):
     """Encode value for database"""
     if isinstance(value, str):
-        value = value.decode('utf-8', errors='replace')
+        return value.decode('utf-8', errors='replace')
     return value
 
 
@@ -277,11 +279,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
         return None
 
     # MAXSIZE is chosen very conservativly.
-    # Even if a batch is larger, it's probably not too large
+    # Even if a batch is larger, it's very likely not too large
     # for a single write call.
     try:
-        executemany(table.get_replace_statement(), entities, retry=True)
-        stats['records'] += len(entities)
+        with DatabaseCursor() as cursor:
+            cursor.executemany(table.get_replace_statement(), entities)
+            stats['records'] += len(entities)
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
 
@@ -299,27 +302,6 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
     stats['time'] += time.time() - start
     return query.GetCursor()
-
-
-def executemany(statement, entities, retry=True):
-    """Wrapper for cursor.executemany with automatic retry"""
-
-    connection = get_connetction()
-    cursor = connection.cursor()
-    try:
-        cursor.executemany(statement, entities)
-
-    except apiproxy_errors.DeadlineExceededError as exception:
-        logging.warn(u'Exception while executing query %r with %d args: %s',
-                     statement, len(entities), exception)
-        if retry:
-            executemany(statement, entities, retry)
-        else:
-            raise
-
-    cursor.close()
-    connection.commit()
-    connection.close()
 
 
 class TaskReplication(webapp2.RequestHandler):
