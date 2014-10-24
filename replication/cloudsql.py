@@ -159,7 +159,7 @@ def get_type(value):
         return unicode
     elif isinstance(value, datastore_types.Text):
         return unicode
-    elif isinstance(value, datastore_types.Key):
+    elif isinstance(value, (datastore_types.Key, datastore_types.BlobKey)):
         return str
     elif isinstance(value, users.User):
         return str
@@ -207,6 +207,8 @@ def encode(value):
     """Encode value for database"""
     if isinstance(value, str):
         return value.decode('utf-8', errors='replace')
+    elif isinstance(value, bool):
+        return int(value)
     return value
 
 
