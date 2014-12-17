@@ -349,7 +349,7 @@ class CronReplication(webapp2.RequestHandler):
 
         models = self.request.get_all('kind')
         if not models:
-            models = replication.get_all_models()
+            models = replication.get_all_datastore_kinds()
 
         for index, kind in enumerate(models):
             if kind.startswith('_'):
