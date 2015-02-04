@@ -293,6 +293,15 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
 
+    except TypeError as exception:
+        if 'not enough arguments' in exception:
+            logging.debug(u'statement: %r', statement)
+            logging.debug(u'table keys (%d): %r', len(table.field.keys()), table.fields.keys())
+            for entity in entities:
+                logging.debug(u'(%d)', len(entity))
+        raise
+
+
     if listdata:
         sync_lists(listdata)
 
