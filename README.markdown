@@ -30,3 +30,7 @@ That's it. Deploy and call `/gaetk_replication/cloudsql/cron`.
 
 [1]: https://code.google.com/apis/console
 [2]: https://developers.google.com/cloud-sql/docs/before_you_begin
+
+
+[![Bitdeli Badge](https://d2weczhvl823v0.cloudfront.net/hudora/gaetk_replication/trend.png)](https://bitdeli.com/free "Bitdeli Badge")
+
