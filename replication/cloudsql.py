@@ -287,15 +287,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
         with DatabaseCursor() as cursor:
             cursor.executemany(table.get_replace_statement(), entities)
             stats['records'] += len(entities)
-    except TypeError, msg:
-        logging.error("TypeError %r", table.get_replace_statement())
         raise
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
-
     except TypeError as exception:
         if 'not enough arguments' in exception:
-            logging.debug(u'statement: %r', statement)
+            logging.debug(u'statement: %r', table.get_replace_statement())
             logging.debug(u'table keys (%d): %r', len(table.field.keys()), table.fields.keys())
             for entity in entities:
                 logging.debug(u'(%d)', len(entity))
