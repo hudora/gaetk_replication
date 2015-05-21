@@ -256,7 +256,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
         for property_operator, value in kwargs['filters']:
             query[property_operator] = value
 
-    batch_size = stats.get('batch_size', 10)
+    batch_size = min(5000, stats.get('batch_size', 10))
     query_iterator = query.Run(limit=batch_size, offset=0)
     listdata = {}
 
@@ -275,7 +275,14 @@ def replicate(table, kind, cursor, stats, **kwargs):
                     table.synchronize_field(field, value)
             entitydicts.append(edict)
 
+    # Ggf. müssen einige Listen aufgefüllt werden.
+    num_fields = len(table.fields.keys())
     entities = table.normalize_entities(entitydicts)
+    if len(table.fields.keys()) > num_fields:
+        num_fields = len(table.fields.keys())
+        for entity in entities:
+            entity.extend([''] * (num_fields - len(entity)))
+
     if not entities:
         stats['time'] += time.time() - start
         return None
