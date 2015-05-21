@@ -26,7 +26,8 @@ from google.appengine.datastore import datastore_query
 
 
 # We want to avoid 'RequestTooLargeError' - the limit is 16 MB
-MAXSIZE = 6 * 1024 * 1024
+MAXSIZE = 1024
+
 
 replication_config = lib_config.register('gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
@@ -72,7 +73,15 @@ def sync_lists(listdata):
             for key, tmp in batch:
                 values.extend((key, attr, value) for attr, value in tmp)
             statement = 'INSERT INTO `ListTable` (_key, field_name, value) VALUES (%s, %s, %s)'
-            cursor.executemany(statement, values)
+            try:
+                cursor.executemany(statement, values)
+            except ProgrammingError:
+                statement = """CREATE TABLE `ListTable` (_key VARCHAR(255) BINARY NOT NULL PRIMARY KEY,
+                                                  field_name VARCHAR(255),
+                                                  value TEXT)
+                               ENGINE MyISAM
+                               CHARACTER SET utf8 COLLATE utf8_general_ci"""
+                cursor.execute(statement)
 
 
 def get_connection():
@@ -219,27 +228,6 @@ def create_entity(entity):
     return collections.OrderedDict(_key=str(entity.key()), _parent=str(parent))
 
 
-def entity_list_generator(iterable, table):
-    """
-    Generator that yields entities as dicts.
-
-    Should only be used for models without ListProperties,
-    instead of the whole list, only the first element is used.
-    """
-    for entity in iterable:
-        edict = create_entity(entity)
-        for field, value in entity.items():
-            if isinstance(value, list):
-                if value:
-                    value = value[0]
-                else:
-                    value = ''
-
-            edict[field] = unicode(encode(value))
-            table.synchronize_field(field, value)
-        yield edict
-
-
 def replicate(table, kind, cursor, stats, **kwargs):
     """Drive replication to Google CloudSQL."""
 
@@ -260,20 +248,17 @@ def replicate(table, kind, cursor, stats, **kwargs):
     query_iterator = query.Run(limit=batch_size, offset=0)
     listdata = {}
 
-    if kwargs.get('use_generator', True):
-        entitydicts = entity_list_generator(query_iterator, table)
-    else:
-        entitydicts = []
-        for entity in query_iterator:
-            edict = create_entity(entity)
-            # Ohne dieses Listengeraffel wäre es hier möglich, einen Generator zu benutzen. Schade.
-            for field, value in entity.items():
-                if isinstance(value, list):
-                    listdata.setdefault(edict['_key'], []).extend([field, encode(elem)] for elem in value)
-                else:
-                    edict[field] = unicode(encode(value))
-                    table.synchronize_field(field, value)
-            entitydicts.append(edict)
+    entitydicts = []
+    for entity in query_iterator:
+        edict = create_entity(entity)
+        # Ohne dieses Listengeraffel wäre es hier möglich, einen Generator zu benutzen. Schade.
+        for field, value in entity.items():
+            if isinstance(value, list):
+                listdata.setdefault(edict['_key'], []).extend([field, encode(elem)] for elem in value)
+            else:
+                edict[field] = unicode(encode(value))
+                table.synchronize_field(field, value)
+        entitydicts.append(edict)
 
     entities = table.normalize_entities(entitydicts)
     if not entities:
@@ -290,12 +275,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
     except TypeError as exception:
-        if 'not enough arguments' in exception:
-            logging.debug(u'statement: %r', table.get_replace_statement())
-            logging.debug(u'table keys (%d): %r', len(table.field.keys()), table.fields.keys())
+        if 'not enough arguments' in str(exception):
+            logging.debug(u'statement: %r', table.get_replace_statement(), exc_info=True)
+            logging.debug(u'%d: %r', len(table.fields), table.fields)
             for entity in entities:
-                logging.debug(u'(%d)', len(entity))
-        raise exception
+                logging.debug(u'(%d): %s', len(entity), entity)
+        raise
 
     if listdata:
         sync_lists(listdata)
