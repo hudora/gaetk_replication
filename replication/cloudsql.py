@@ -8,7 +8,7 @@ Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013, 2014, 2015 HUDORA. All rights reserved.
 """
 import collections
-import itertools
+import hashlib
 import logging
 import sys
 import time
@@ -64,6 +64,9 @@ class DatabaseCursor(object):
         self.connection.close()
 
 
+# Solange es nicht alle benötigte Spalten in der Tabelle gibt, kommt es zu
+# exceptions, das heilt sich aber von selber.
+
 class Table(object):
     """Keeps Infomation on a CloudSQL Table."""
     def __init__(self, kind):
@@ -109,7 +112,6 @@ def setup_table(kind):
                            ENGINE InnoDB
                            CHARACTER SET utf8 COLLATE utf8_general_ci""" % kind
             cursor.execute(statement)
-
     return table
 
 
@@ -155,7 +157,6 @@ def create_field(table_name, field_name, field_type):
     with DatabaseCursor() as cursor:
         try:
             cursor.execute(statement)
-            cursor.commit()
         except rdbms.DatabaseError:
             logging.error(u'Error while executing statement %r', statement)
             raise
@@ -184,11 +185,17 @@ def encode(value):
     return value
 
 
+def get_key(entity):
+    return hashlib.md5(str(entity.key())).hexdigest()
+
+
 def create_entity(entity):
     parent = entity.key().parent()
     if not parent:
         parent = ''
-    return collections.OrderedDict(_key=str(entity.key()), _parent=str(parent))
+    else:
+        parent = hashlib.md5(str(parent)).hexdigest()
+    return collections.OrderedDict(_key=get_key(entity), _parent=parent)
 
 
 def entity_list_generator(iterable, table):
@@ -243,13 +250,15 @@ def replicate(table, kind, cursor, stats, **kwargs):
             stats['records'] += len(entities)
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
+        raise
     except TypeError as exception:
         if 'not enough arguments' in str(exception):
             logging.debug(u'statement: %r', table.get_replace_statement(), exc_info=True)
             logging.debug(u'%d: %r', len(table.fields), table.fields)
             for entity in entities:
-                logging.debug(u'(%d): %s', len(entity), entity)
-                break
+                if len(entity) != len(table.fields):
+                    logging.debug(u'(%d): %s', len(entity), entity)
+                    break
         raise
     except:
         logging.debug(u'statement: %r', table.get_replace_statement(), exc_info=True)
@@ -298,6 +307,9 @@ class TaskReplication(webapp2.RequestHandler):
         if cursor:
             params = dict(cursor=cursor.to_websafe_string(), kind=kind)
             params.update(stats)
+            # Avoid OOM
+            del(cursor)
+            del(table)
             taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                           name='%s-%s-%s' % (kind, stats['records'], int(time.time())),
                           url=self.request.path,
@@ -318,14 +330,7 @@ class CronReplication(webapp2.RequestHandler):
         for index, kind in enumerate(models):
             if kind.startswith('_'):
                 continue
-            if kind.startswith('ic_'):
-                countdown = 1
-            elif kind.startswith('fk_'):
-                countdown = 5
-            elif kind.startswith('bi_'):
-                countdown = 60
-            else:
-                countdown = 300
+            countdown = 1
             taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                           url='/gaetk_replication/cloudsql/worker/%s' % kind,
                           params=dict(kind=kind),
