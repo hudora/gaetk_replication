@@ -354,12 +354,13 @@ class TaskReplication(webapp2.RequestHandler):
                 update_state(state)
             except MVCCColission:
                 logging.error(u'Kollision bei %s, exiting...', kind)
+                return
 
             taskqueue.add(url=self.request.path,
                           params=stats,
                           name='{}-{}-{}'.format(kind, stats['records'], int(time.time())),
                           queue_name=replication_config.SQL_QUEUE_NAME,
-                          countdown=15)
+                          countdown=5)
         else:
             state.done = True
             state.put()
