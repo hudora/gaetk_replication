@@ -18,5 +18,5 @@ def get_all_datastore_kinds():
 
     # Print query results
     for k in q:
-      if not k.kind_name.startswith('_'):
-        yield k.kind_name
+        if not k.kind_name.startswith('_'):
+            yield k.kind_name

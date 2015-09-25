@@ -8,14 +8,13 @@ Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013, 2014, 2015 HUDORA. All rights reserved.
 """
 import collections
+import datetime
 import hashlib
 import logging
+import random
 import sys
 import time
 
-from datetime import datetime
-
-import google.appengine.ext.db
 import replication
 import webapp2
 
@@ -26,18 +25,42 @@ from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
 from google.appengine.api import users
 from google.appengine.datastore import datastore_query
+from google.appengine.ext import db
 
 
 # We want to avoid 'RequestTooLargeError' - the limit is 16 MB
-MAXSIZE = 1024 * 1024
-MAXRECORDS = 2500
 
 replication_config = lib_config.register(
     'gaetk_replication',
     dict(SQL_INSTANCE_NAME='*unset*',
          SQL_DATABASE_NAME='*unset*',
          SQL_QUEUE_NAME='default',
-         ))
+         MAXSIZE=1536 * 1024,
+         MAXRECORDS=3000,
+         BLACKLIST=[],
+    )
+)
+
+
+class MVCCColission(Exception):
+    """Exception für eine Kollision bei der MVCC"""
+
+
+class gaetk_ReplicationState(db.Model):
+    batch_size = db.IntegerProperty(default=25)
+    cursor = db.StringProperty(indexed=False)
+    done = db.BooleanProperty(default=False)
+    updated_at = db.DateTimeProperty(auto_now=True)
+
+
+@db.transactional
+def update_state(state):
+    """gaetk_ReplicationState aktualisieren"""
+    obj = gaetk_ReplicationState.get(state.key())
+    if obj.updated_at != state.updated_at:
+        raise MVCCColission
+
+    state.put()
 
 
 def get_connection():
@@ -65,13 +88,13 @@ class DatabaseCursor(object):
 
 
 # Solange es nicht alle benötigte Spalten in der Tabelle gibt, kommt es zu
-# exceptions, das heilt sich aber von selber.
+# Exceptions, das heilt sich aber von selber.
 
 class Table(object):
     """Keeps Infomation on a CloudSQL Table."""
     def __init__(self, kind):
         self.name = kind
-        self.fields = dict(_key=str, _parent=str, updated_at=datetime)
+        self.fields = dict(_key=str, _parent=str, updated_at=datetime.datetime)
 
     def synchronize_field(self, field_name, value):
         """Add field to table"""
@@ -116,10 +139,10 @@ def setup_table(kind):
 
 
 def get_type(value):
-    """Datastore to Plain-Python Type Mapping"""
+    """Datastore to Plain Python type mapping"""
 
-    if isinstance(value, datetime):
-        return datetime
+    if isinstance(value, datetime.datetime):
+        return datetime.datetime
     elif isinstance(value, (bool, long, int, float)):
         return type(value)
     elif isinstance(value, (str, unicode)):
@@ -139,7 +162,7 @@ def get_type(value):
 def create_field(table_name, field_name, field_type):
     """Create a Row in CloudSQL based on Datastore Datatype."""
 
-    if field_type == datetime:
+    if field_type == datetime.datetime:
         statement = "ALTER TABLE `%s` ADD COLUMN `%s` DATETIME" % (table_name, field_name)
     elif field_type in (int, long):
         statement = "ALTER TABLE `%s` ADD COLUMN `%s` BIGINT" % (table_name, field_name)
@@ -186,10 +209,19 @@ def encode(value):
 
 
 def get_key(entity):
+    """
+    Create a key for the database
+
+    The string representation of the Appengine Datastore keys
+    kann become quite long, 100 characters and more.
+    We use the fixed size MD5 encoding of the key because MySQL
+    seems to be unable to handle keys longer than 64 characters properly.
+    """
     return hashlib.md5(str(entity.key())).hexdigest()
 
 
 def create_entity(entity):
+    """Create entity dict from Datastore entity"""
     parent = entity.key().parent()
     if not parent:
         parent = ''
@@ -207,7 +239,7 @@ def entity_list_generator(iterable, table):
                 edict[field] = unicode(encode(value))
                 table.synchronize_field(field, value)
             yield edict
-    except google.appengine.ext.db.Timeout:
+    except db.Timeout:
         logging.warning('datastore timeout')
         raise StopIteration
     except Exception, msg:
@@ -267,11 +299,11 @@ def replicate(table, kind, cursor, stats, **kwargs):
     # Adapt batch size. This could be further optimized in the future,
     # like adapting it to a ratio of size and MAXSIZE.
     size = get_listsize(entities)
-    if size * 2 < MAXSIZE:
-        stats['batch_size'] = int(min([MAXRECORDS, batch_size * 2]))
+    if size * 2 < replication_config.MAXSIZE:
+        stats['batch_size'] = int(min([replication_config.MAXRECORDS, batch_size * 2]))
         logging.info(u'increasing batch_size to %d', stats['batch_size'])
-    elif size > MAXSIZE:
-        stats['batch_size'] = int(min([MAXRECORDS, batch_size * 0.8]))
+    elif size > replication_config.MAXSIZE:
+        stats['batch_size'] = int(min([replication_config.MAXRECORDS, batch_size * 0.8]))
         logging.info(u'decreasing batch_size to %d', stats['batch_size'])
 
     stats['time'] += time.time() - start
@@ -279,9 +311,9 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
 
 class TaskReplication(webapp2.RequestHandler):
-    """Replicate a single Model to CloudSQL."""
+    """Replicate a model to CloudSQL."""
     def get(self):
-        """Start Task manually."""
+        """Start Task for `kind`"""
         kind = self.request.get('kind')
         taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                       url=self.request.path,
@@ -291,31 +323,47 @@ class TaskReplication(webapp2.RequestHandler):
     def post(self):
         """Is called for each model and then chains to itself"""
         kind = self.request.get('kind')
-        cursor = self.request.get('cursor', None)
-        stats = dict(records=int(self.request.get('records', 0)),
-                     time=float(self.request.get('time', 0)),
-                     starttime=int(self.request.get('starttime', time.time())),
-                     batch_size=int(float(self.request.get('batch_size', 25))))
-        if cursor:
-            cursor = datastore_query.Cursor.from_websafe_string(cursor)
+
+        state = gaetk_ReplicationState.get_by_key_name(kind)
+        if not state:
+            logging.warn(u'Kein gaetk_ReplicationState für %s gefunden, Task wird beendet.', kind)
+            return
+        elif state.done:
+            logging.warn(u'Task für beendete Replikation von %s wird beendet.', kind)
+            return
+
+        stats = dict(kind=kind,
+                     records=self.request.get_range('records', default=0),
+                     starttime=self.request.get_range('starttime', default=int(time.time())),
+                     batch_size=state.batch_size,
+                     time=float(self.request.get('time', 0)))
+        if state.cursor:
+            cursor = datastore_query.Cursor.from_websafe_string(state.cursor)
+        else:
+            cursor = None
         table = setup_table(kind)
-        logging.info(u'%s: starte %d Batch', kind, stats['batch_size'])
+        logging.info(u'%s: starte %d Batch', kind, state.batch_size)
         cursor = replicate(table, kind, cursor, stats)
         logging.info(u'%s: bisher %d Records in %.1f s. Laufzeit %d s.',
-                     kind, stats['records'], stats['time'],
-                     time.time() - stats['starttime'])
+                     kind, stats['records'], stats['time'], time.time() - stats['starttime'])
         if cursor:
-            params = dict(cursor=cursor.to_websafe_string(), kind=kind)
-            params.update(stats)
-            # Avoid OOM
-            del(cursor)
-            del(table)
-            taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
-                          name='%s-%s-%s' % (kind, stats['records'], int(time.time())),
-                          url=self.request.path,
-                          params=params)
+            state.cursor = cursor.to_websafe_string()
+            state.batch_size = stats.pop('batch_size')
+
+            try:
+                update_state(state)
+            except MVCCColission:
+                logging.error(u'Kollision bei %s, exiting...', kind)
+
+            taskqueue.add(url=self.request.path,
+                          params=stats,
+                          name='{}-{}-{}'.format(kind, stats['records'], int(time.time())),
+                          queue_name=replication_config.SQL_QUEUE_NAME,
+                          countdown=15)
         else:
-            logging.info('%s fertig repliziert', kind)
+            state.done = True
+            state.put()
+            logging.info(u'Replikation von %s beendet.', kind)
 
 
 class CronReplication(webapp2.RequestHandler):
@@ -328,14 +376,24 @@ class CronReplication(webapp2.RequestHandler):
             models = replication.get_all_datastore_kinds()
 
         for index, kind in enumerate(models):
-            if kind.startswith('_'):
+            if kind.startswith(('_', 'gaetk_')):
                 continue
-            countdown = 1
-            taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
-                          url='/gaetk_replication/cloudsql/worker/%s' % kind,
-                          params=dict(kind=kind),
-                          name='%s-%s' % (kind, int(time.time())),
-                          countdown=index * countdown)
+            elif kind in replication_config.BLACKLIST:
+                logging.info(u'Ignoring %s', kind)
+                continue
+
+            # Erzeuge leeres State-Objekt, damit eine neue Replikation beginnen kann.
+            state = gaetk_ReplicationState(key_name=kind)
+            state.put()
+
+            countdown = 100
+            taskqueue.add(
+                url='/gaetk_replication/cloudsql/worker/%s' % kind,
+                params=dict(kind=kind),
+                name='%s-%s' % (kind, int(time.time())),
+                queue_name=replication_config.SQL_QUEUE_NAME,
+                countdown=index * countdown)
+
         self.response.headers['Content-Type'] = 'text/plain'
         self.response.write('ok\n')
 
