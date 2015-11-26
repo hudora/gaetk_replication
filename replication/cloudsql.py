@@ -57,9 +57,10 @@ class gaetk_ReplicationState(db.Model):
 def update_state(state):
     """gaetk_ReplicationState aktualisieren"""
     obj = gaetk_ReplicationState.get(state.key())
+    if not obj:
+        raise MVCCColission
     if obj.updated_at != state.updated_at:
         raise MVCCColission
-
     state.put()
 
 
