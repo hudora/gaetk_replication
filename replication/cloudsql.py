@@ -8,14 +8,16 @@ Created by Maximillian Dornseif on 2012-11-12.
 Copyright (c) 2012, 2013, 2014 HUDORA. All rights reserved.
 """
 import collections
-import logging
 import itertools
-import time
+import logging
 import sys
+import time
+
 from datetime import datetime
 
 import replication
 import webapp2
+
 from google.appengine.api import datastore
 from google.appengine.api import datastore_types
 from google.appengine.api import lib_config
@@ -290,7 +292,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
     except TypeError as exception:
-        if 'not enough arguments' in exception:
+        if 'not enough arguments' in str(exception):
             logging.debug(u'statement: %r', table.get_replace_statement())
             logging.debug(u'table keys (%d): %r', len(table.field.keys()), table.fields.keys())
             for entity in entities:
