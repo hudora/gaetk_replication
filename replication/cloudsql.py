@@ -38,7 +38,7 @@ replication_config = lib_config.register(
          MAXSIZE=1536 * 1024,
          MAXRECORDS=3000,
          BLACKLIST=[],
-    )
+         )
 )
 
 
@@ -76,6 +76,7 @@ def get_connection():
 
 class DatabaseCursor(object):
     """Context Manager for connection to Google Cloud SQL"""
+
     def __enter__(self):
         self.connection = get_connection()
         self.cursor = self.connection.cursor()
@@ -93,6 +94,7 @@ class DatabaseCursor(object):
 
 class Table(object):
     """Keeps Infomation on a CloudSQL Table."""
+
     def __init__(self, kind):
         self.name = kind
         self.fields = dict(_key=str, _parent=str, updated_at=datetime.datetime)
@@ -313,6 +315,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
 class TaskReplication(webapp2.RequestHandler):
     """Replicate a model to CloudSQL."""
+
     def get(self):
         """Start Task for `kind`"""
         kind = self.request.get('kind')
@@ -370,6 +373,7 @@ class TaskReplication(webapp2.RequestHandler):
 
 class CronReplication(webapp2.RequestHandler):
     """Steuerung der Replizierung zu Google CloudSQL."""
+
     def get(self):
         """Wöchentlich von Cron aufzurufen."""
 
