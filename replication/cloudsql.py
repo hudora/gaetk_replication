@@ -294,7 +294,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except TypeError as exception:
         if 'not enough arguments' in str(exception):
             logging.debug(u'statement: %r', table.get_replace_statement())
-            logging.debug(u'table keys (%d): %r', len(table.field.keys()), table.fields.keys())
+            logging.debug(u'table keys (%d): %r', len(table.fields), table.fields.keys())
             for entity in entities:
                 logging.debug(u'(%d)', len(entity))
         raise exception
