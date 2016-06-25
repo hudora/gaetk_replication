@@ -319,6 +319,9 @@ class TaskReplication(webapp2.RequestHandler):
     def get(self):
         """Start Task for `kind`"""
         kind = self.request.get('kind')
+        # Erzeuge leeres State-Objekt, damit eine neue Replikation beginnen kann.
+        state = gaetk_ReplicationState(key_name=kind)
+        state.put()
         taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                       url=self.request.path,
                       params=dict(kind=kind))
