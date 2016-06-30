@@ -124,6 +124,7 @@ class Table(object):
     def normalize_entities(self, entitylist, default=''):
         """Ensure all entities have all keys"""
         keys = self.fields.keys()
+        # hier scheint der Hase im Pfeffer zu liegern
         return [[entity.get(name, default) for name in keys] for entity in entitylist]
 
 
@@ -292,11 +293,18 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
     except TypeError as exception:
+        # Tritt auf, wenn verschiedene Entities eine verschiedene Anzahl Properties haben
         if 'not enough arguments' in str(exception):
+            # kommt immer mal vor, dass len(entity) < table.fields.keys().
+            # wie das passieren kann ist mir im Grund eunklar.
+            # das ist, wenn neue Properties/Attribute in der Datenbank zugefügt
+            # werden, aber `table.normalize_entities(entitydicts)`
+            # sollte dsa eigentlich maskieren.
             logging.debug(u'statement: %r', table.get_replace_statement())
             logging.debug(u'table keys (%d): %r', len(table.fields), table.fields.keys())
             for entity in entities:
-                logging.debug(u'(%d)', len(entity))
+                logging.debug(u'entity values: (%d) %s', len(entity), entity)
+            logging.debug(u'entitydicts: %r', entitydicts)
         raise exception
 
     if listdata:
@@ -328,6 +336,11 @@ class TaskReplication(webapp2.RequestHandler):
     def post(self):
         """Is called for each model and then chains to itself"""
         kind = self.request.get('kind')
+        if not kind:
+            # called by accident
+            logging.critical("no kind given, aborting")
+            return
+
         cursor = self.request.get('cursor', None)
         stats = dict(records=int(self.request.get('records', 0)),
                      time=float(self.request.get('time', 0)),
