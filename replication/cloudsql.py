@@ -299,13 +299,17 @@ def replicate(table, kind, cursor, stats, **kwargs):
             # wie das passieren kann ist mir im Grund eunklar.
             # das ist, wenn neue Properties/Attribute in der Datenbank zugefügt
             # werden, aber `table.normalize_entities(entitydicts)`
-            # sollte dsa eigentlich maskieren.
-            logging.debug(u'statement: %r', table.get_replace_statement())
+            # sollte das eigentlich maskieren - das
+            # klappt aber wegen des Generators nicht zwingend
+            logging.error(u'statement: %r', table.get_replace_statement())
             logging.debug(u'table keys (%d): %r', len(table.fields), table.fields.keys())
             for entity in entities:
                 logging.debug(u'entity values: (%d) %s', len(entity), entity)
             logging.debug(u'entitydicts: %r', entitydicts)
-        raise exception
+            # Taskqueue: Please retry
+            raise webapp2.HTTPTemporaryRedirect(location='')
+        else:
+            raise exception
 
     if listdata:
         sync_lists(listdata)
