@@ -293,23 +293,12 @@ def replicate(table, kind, cursor, stats, **kwargs):
     except (rdbms.InternalError, rdbms.IntegrityError), msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
     except TypeError as exception:
-        # Tritt auf, wenn verschiedene Entities eine verschiedene Anzahl Properties haben
+        # Tritt auf, wenn verschiedene Entities eine verschiedene Anzahl Properties haben,
+        # verursacht durch die Verwendung eines Generators (entity_list_generator).
+        # Heilt sich selbst, tritt aber bei jeder Schemaänderung auf.
         if 'not enough arguments' in str(exception):
-            # kommt immer mal vor, dass len(entity) < table.fields.keys().
-            # wie das passieren kann ist mir im Grund eunklar.
-            # das ist, wenn neue Properties/Attribute in der Datenbank zugefügt
-            # werden, aber `table.normalize_entities(entitydicts)`
-            # sollte das eigentlich maskieren - das
-            # klappt aber wegen des Generators nicht zwingend
             logging.error(u'statement: %r', table.get_replace_statement())
-            logging.debug(u'table keys (%d): %r', len(table.fields), table.fields.keys())
-            for entity in entities:
-                logging.debug(u'entity values: (%d) %s', len(entity), entity)
-            logging.debug(u'entitydicts: %r', entitydicts)
-            # Taskqueue: Please retry
-            raise webapp2.HTTPTemporaryRedirect(location='')
-        else:
-            raise exception
+        raise exception
 
     if listdata:
         sync_lists(listdata)
