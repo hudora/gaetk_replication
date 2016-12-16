@@ -47,7 +47,7 @@ class MVCCColission(Exception):
 
 
 class gaetk_ReplicationState(db.Model):
-    batch_size = db.IntegerProperty(default=25)
+    batch_size = db.IntegerProperty(default=25, indexed=False)
     cursor = db.StringProperty(indexed=False)
     done = db.BooleanProperty(default=False)
     updated_at = db.DateTimeProperty(auto_now=True)
@@ -320,7 +320,9 @@ class TaskReplication(webapp2.RequestHandler):
         """Start Task for `kind`"""
         kind = self.request.get('kind')
         # Erzeuge leeres State-Objekt, damit eine neue Replikation beginnen kann.
-        state = gaetk_ReplicationState(key_name=kind)
+        state = gaetk_ReplicationState(
+            key_name=kind,
+            batch_size=self.request.get_range('batch_size', default=25, min_value=10))
         state.put()
         taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                       url=self.request.path,
