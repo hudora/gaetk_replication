@@ -11,7 +11,6 @@ import collections
 import datetime
 import hashlib
 import logging
-import random
 import sys
 import time
 
