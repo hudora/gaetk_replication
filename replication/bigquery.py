@@ -105,8 +105,10 @@ class CronReplication(webapp2.RequestHandler):
         regexp = re.compile(latest + r'(\w+)\.(\w+)\.backup_info')
         for obj in cloudstorage.listbucket(latest):
             if regexp.match(obj.filename):
-                taskqueue.add(url=self.request.path, filename=obj.filename,
-                              queue_name=replication_config.BIGQUERY_QUEUE_NAME)
+                taskqueue.add(
+                    url=self.request.path,
+                    params={'filename': obj.filename},
+                    queue_name=replication_config.BIGQUERY_QUEUE_NAME)
 
     def post(self):
         filename = self.request.get('filename')
