@@ -92,13 +92,19 @@ class CronReplication(webapp2.RequestHandler):
         subdirs = sorted((obj.filename for obj in cloudstorage.listbucket(
             replication_config.GS_BUCKET, delimiter='/') if obj.is_dir), reverse=True)
 
-        if not subdirs:
-            logging.error(u'No datastore backups in %r', replication_config.GS_BUCKET)
-            return
+        datum = None
+        latest = None
+        for subdir in subdirs:
+            latest = subdir
+            try:
+                datum = convert_to_date(latest.rstrip('/').split('/')[-1])
+            except ValueError:
+                continue
 
-        latest = subdirs[0]
-        datum = convert_to_date(latest.rstrip('/').split('/')[-1])
-        if datum < datetime.date.today() - datetime.timedelta(days=14):
+        if not latest:
+            logging.error(u'No Datastore Backup found in %r', replication_config.GS_BUCKET)
+            return
+        elif datum < datetime.date.today() - datetime.timedelta(days=14):
             logging.error(u'Latest Datastore Backup is way too old!')
             return
 
