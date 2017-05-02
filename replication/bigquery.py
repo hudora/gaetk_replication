@@ -95,13 +95,16 @@ class CronReplication(webapp2.RequestHandler):
         datum = None
         latest = None
         for subdir in subdirs:
+            logging.debug(u'subdir: %s', subdir)
             latest = subdir
             try:
                 datum = convert_to_date(latest.rstrip('/').split('/')[-1])
             except ValueError:
                 continue
+            latest = subdir
+            break
 
-        if not latest:
+        if not datum:
             logging.error(u'No Datastore Backup found in %r', replication_config.GS_BUCKET)
             return
         elif datum < datetime.date.today() - datetime.timedelta(days=14):
