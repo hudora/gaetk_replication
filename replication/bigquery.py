@@ -25,6 +25,7 @@ from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
 from huTools.calendar.formats import convert_to_date
+from webob.exc import HTTPServerError as HTTP500_ServerError
 
 
 replication_config = lib_config.register(
@@ -75,14 +76,13 @@ def upload_backup_file(filename):
     job = create_job(filename)
     job.begin()
 
-    # TODO: Mit irgendwas schickem ersetzen? deferred oder taskqueue oder sowas?
     while True:
         job.reload()
         if job.state == 'DONE':
             if job.error_result:
-                logging.error(u'FAILED JOB, error_result: %s', job.error_result)
+                raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
             break
-        time.sleep(1)
+        time.sleep(5)  # ghetto polling
 
 
 class CronReplication(webapp2.RequestHandler):
@@ -90,32 +90,43 @@ class CronReplication(webapp2.RequestHandler):
 
     def get(self):
         u"""Regelmäßig von Cron aufzurufen."""
-        bucketname = '/' + '/'.join((replication_config.GS_BUCKET,get_application_id()))
-        logging.info(u'searching backups in %r', bucketname)
-        subdirs = sorted((obj.filename for obj in cloudstorage.listbucket(
-            bucketname, delimiter='/') if obj.is_dir), reverse=True)
+        bucketpath = '/'.join((replication_config.GS_BUCKET, get_application_id())) + '/'
+        logging.info(u'searching backups in %r', bucketpath)
 
-        datum = None
-        latest = None
+        logging.debug("bucketname: %s", list((obj.filename for obj in cloudstorage.listbucket(bucketpath, delimiter='/') if obj.is_dir)))
+        subdirs = sorted((obj.filename for obj in 
+            cloudstorage.listbucket(
+                bucketpath, delimiter='/') if obj.is_dir),
+            reverse=True)
+
+        # Find Path of newest available backup
+        # typical path: 
+        # '/appengine-backups-eu-nearline/hudoraexpress/2017-05-02/ag9...EM.ArtikelBild.backup_info'
+        regexp = re.compile(bucketpath + r'(\w+)\.(\w+)\.backup_info')
+        datum, latestdatum, latestsubdir = None, None, None
+        dirs = dict()
         for subdir in subdirs:
             logging.debug(u'subdir: %s', subdir)
-            latest = subdir
+            datepart = subdir.rstrip('/').split('/')[-1]
+            logging.debug(u'datepart: %s', datepart)
+            datum = None
             try:
-                datum = convert_to_date(latest.rstrip('/').split('/')[-1])
+                datum = convert_to_date(subdir.rstrip('/').split('/')[-1])
             except ValueError:
                 continue
-            latest = subdir
-            break
+            dirs[datum] = subdir
 
-        if not datum:
-            logging.error(u'No Datastore Backup found in %r', replication_config.GS_BUCKET)
-            return
-        elif datum < datetime.date.today() - datetime.timedelta(days=14):
-            logging.error(u'Latest Datastore Backup is way too old!')
-            return
+        if not dirs:
+            raise HTTP500_ServerError(u'No Datastore Backup found in %r' % bucketpath)
 
-        regexp = re.compile(latest + r'(\w+)\.(\w+)\.backup_info')
-        for obj in cloudstorage.listbucket(latest):
+        datum = max(dirs)
+        subdir = dirs[datum]
+
+        if datum < datetime.date.today() - datetime.timedelta(days=14):
+            raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
+
+        regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
+        for obj in cloudstorage.listbucket(subdir):
             if regexp.match(obj.filename):
                 taskqueue.add(
                     url=self.request.path,
@@ -124,6 +135,7 @@ class CronReplication(webapp2.RequestHandler):
 
     def post(self):
         filename = self.request.get('filename')
+        logging.debug(u'uploading %s', filename)
         upload_backup_file(filename)
 
 
