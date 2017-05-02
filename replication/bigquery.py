@@ -20,10 +20,11 @@ import time
 import cloudstorage
 import webapp2
 
-from google.cloud import bigquery
-from huTools.calendar.formats import convert_to_date
 from google.appengine.api import lib_config
 from google.appengine.api import taskqueue
+from google.appengine.api.app_identity import get_application_id
+from google.cloud import bigquery
+from huTools.calendar.formats import convert_to_date
 
 
 replication_config = lib_config.register(
@@ -37,7 +38,7 @@ replication_config = lib_config.register(
          BIGQUERY_PROJECT='project',
          BIGQUERY_DATASET='dataset',
          BIGQUERY_QUEUE_NAME='default',
-         GS_BUCKET='/bucketname')
+         GS_BUCKET='bucketname')
 )
 
 
@@ -88,7 +89,8 @@ class CronReplication(webapp2.RequestHandler):
     """Steuerung der Replizierung zu Google BigQuery."""
 
     def get(self):
-        """Wöchentlich von Cron aufzurufen."""
+        u"""Regelmäßig von Cron aufzurufen."""
+        bucketname = '/'.join((replication_config.GS_BUCKET,get_application_id()))
         subdirs = sorted((obj.filename for obj in cloudstorage.listbucket(
             replication_config.GS_BUCKET, delimiter='/') if obj.is_dir), reverse=True)
 
