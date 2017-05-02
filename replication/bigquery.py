@@ -92,7 +92,7 @@ class CronReplication(webapp2.RequestHandler):
         u"""Regelmäßig von Cron aufzurufen."""
         bucketname = '/' + '/'.join((replication_config.GS_BUCKET,get_application_id()))
         subdirs = sorted((obj.filename for obj in cloudstorage.listbucket(
-            replication_config.GS_BUCKET, delimiter='/') if obj.is_dir), reverse=True)
+            bucketname, delimiter='/') if obj.is_dir), reverse=True)
 
         datum = None
         latest = None
