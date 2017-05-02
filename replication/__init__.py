@@ -12,11 +12,12 @@ Copyright (c) 2012, 2014 HUDORA GmbH. All rights reserved.
 
 from google.appengine.ext.db.metadata import Kind
 
+
 def get_all_datastore_kinds():
     # Start with unrestricted kind query
     q = Kind.all()
 
     # Print query results
     for k in q:
-      if not k.kind_name.startswith('_'):
-        yield k.kind_name
+        if not k.kind_name.startswith('_'):
+            yield k.kind_name
