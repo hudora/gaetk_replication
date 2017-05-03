@@ -73,16 +73,19 @@ def create_job(filename):
 
 def upload_backup_file(filename):
     u"""Lade Datastore-Backup-Datei zu Google BigQuery"""
+    logging.info('uploading %r', filename)
     job = create_job(filename)
     job.begin()
+    logging.info("job %s", job)
 
     while True:
         job.reload()
         if job.state == 'DONE':
             if job.error_result:
                 raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
-            break
+        logging.debug("waiting %s %s", job.state, job)
         time.sleep(5)  # ghetto polling
+    logging.debug("done %s", job)
 
 
 class CronReplication(webapp2.RequestHandler):
@@ -94,13 +97,13 @@ class CronReplication(webapp2.RequestHandler):
         logging.info(u'searching backups in %r', bucketpath)
 
         logging.debug("bucketname: %s", list((obj.filename for obj in cloudstorage.listbucket(bucketpath, delimiter='/') if obj.is_dir)))
-        subdirs = sorted((obj.filename for obj in 
+        subdirs = sorted((obj.filename for obj in
             cloudstorage.listbucket(
                 bucketpath, delimiter='/') if obj.is_dir),
             reverse=True)
 
         # Find Path of newest available backup
-        # typical path: 
+        # typical path:
         # '/appengine-backups-eu-nearline/hudoraexpress/2017-05-02/ag9...EM.ArtikelBild.backup_info'
         regexp = re.compile(bucketpath + r'(\w+)\.(\w+)\.backup_info')
         datum, latestdatum, latestsubdir = None, None, None
@@ -135,7 +138,6 @@ class CronReplication(webapp2.RequestHandler):
 
     def post(self):
         filename = self.request.get('filename')
-        logging.debug(u'uploading %s', filename)
         upload_backup_file(filename)
 
 
