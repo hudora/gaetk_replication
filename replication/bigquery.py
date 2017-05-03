@@ -129,16 +129,21 @@ class CronReplication(webapp2.RequestHandler):
             raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
 
         regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
+        countdown = 1
         for obj in cloudstorage.listbucket(subdir):
             if regexp.match(obj.filename):
                 taskqueue.add(
                     url=self.request.path,
                     params={'filename': obj.filename},
-                    queue_name=replication_config.BIGQUERY_QUEUE_NAME)
+                    queue_name=replication_config.BIGQUERY_QUEUE_NAME,
+                    countdown=countdown)
+                countdown += 2
+        self.response.write('ok, countdown=%d\n' % countdown)
 
     def post(self):
         filename = self.request.get('filename')
         upload_backup_file(filename)
+        self.response.write('ok\n')
 
 
 # for the python 2.7 runtime application needs to be top-level
