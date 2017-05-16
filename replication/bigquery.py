@@ -20,39 +20,25 @@ import time
 import cloudstorage
 import webapp2
 
-from google.appengine.api import lib_config
 from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
-
-replication_config = lib_config.register(
-    'gaetk_replication',
-    dict(SQL_INSTANCE_NAME='*unset*',
-         SQL_DATABASE_NAME='*unset*',
-         SQL_QUEUE_NAME='default',
-         MAXSIZE=1536 * 1024,
-         MAXRECORDS=3000,
-         BLACKLIST=[],
-         BIGQUERY_PROJECT='project',
-         BIGQUERY_DATASET='dataset',
-         BIGQUERY_QUEUE_NAME='default',
-         GS_BUCKET='bucketname')
-)
+import replication
 
 
 def create_job(filename):
     u"""Erzeuge Job zum Upload einer Datastore-Backup-Datei zu Google BigQuery"""
-    bigquery_client = bigquery.Client(project=replication_config.BIGQUERY_PROJECT)
+    bigquery_client = bigquery.Client(project=replication.replication_config.BIGQUERY_PROJECT)
     tablename = filename.split('.')[-2]
     resource = {
         'configuration': {
             'load': {
                 'destinationTable': {
-                    'projectId': replication_config.BIGQUERY_PROJECT,
-                    'datasetId': replication_config.BIGQUERY_DATASET,
+                    'projectId': replication.replication_config.BIGQUERY_PROJECT,
+                    'datasetId': replication.replication_config.BIGQUERY_DATASET,
                     'tableId': tablename},
                 'maxBadRecords': 0,
                 'sourceUris': ['gs:/' + filename],
@@ -93,10 +79,9 @@ class CronReplication(webapp2.RequestHandler):
 
     def get(self):
         u"""Regelmäßig von Cron aufzurufen."""
-        bucketpath = '/'.join((replication_config.GS_BUCKET, get_application_id())) + '/'
+        bucketpath = '/'.join((replication.replication_config.GS_BUCKET, get_application_id())) + '/'
         logging.info(u'searching backups in %r', bucketpath)
 
-        logging.debug("bucketname: %s", list((obj.filename for obj in cloudstorage.listbucket(bucketpath, delimiter='/') if obj.is_dir)))
         subdirs = sorted((obj.filename for obj in
             cloudstorage.listbucket(
                 bucketpath, delimiter='/') if obj.is_dir),
@@ -135,7 +120,7 @@ class CronReplication(webapp2.RequestHandler):
                 taskqueue.add(
                     url=self.request.path,
                     params={'filename': obj.filename},
-                    queue_name=replication_config.BIGQUERY_QUEUE_NAME,
+                    queue_name=replication.replication_config.BIGQUERY_QUEUE_NAME,
                     countdown=countdown)
                 countdown += 2
         self.response.write('ok, countdown=%d\n' % countdown)
