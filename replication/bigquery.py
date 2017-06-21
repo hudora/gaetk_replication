@@ -22,8 +22,10 @@ import webapp2
 
 from google.appengine.api import lib_config
 from google.appengine.api import taskqueue
+from google.appengine.ext import deferred
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
+from google.cloud.credentials import get_credentials
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
@@ -42,10 +44,21 @@ replication_config = lib_config.register(
          GS_BUCKET='bucketname')
 )
 
+HTTPLIB2_TIMEOUT = 50
+
+
+def get_client():
+    """BigQuery-Client erzeugen."""
+    credentials = google.auth.credentials.with_scopes_if_required(get_credentials(), bigquery.Client.SCOPE)
+    http = httplib2.Http(timeout=HTTPLIB2_TIMEOUT)
+    return bigquery.Client(
+        project=replication_config.BIGQUERY_PROJECT,
+        _http=google_auth_httplib2.AuthorizedHttp(credentials, http))
+
 
 def create_job(filename):
     u"""Erzeuge Job zum Upload einer Datastore-Backup-Datei zu Google BigQuery"""
-    bigquery_client = bigquery.Client(project=replication_config.BIGQUERY_PROJECT)
+    bigquery_client = get_client()
     tablename = filename.split('.')[-2]
     resource = {
         'configuration': {
@@ -56,7 +69,9 @@ def create_job(filename):
                     'tableId': tablename},
                 'maxBadRecords': 0,
                 'sourceUris': ['gs:/' + filename],
-                'projectionFields': []
+                'projectionFields': [],
+                'source_format': 'DATASTORE_BACKUP',
+                'write_disposition': 'WRITE_TRUNCATE',
             }
         },
         'jobReference': {
@@ -65,10 +80,20 @@ def create_job(filename):
         }
     }
 
-    job = bigquery_client.job_from_resource(resource)
-    job.source_format = 'DATASTORE_BACKUP'
-    job.write_disposition = 'WRITE_TRUNCATE'
-    return job
+    return bigquery_client.job_from_resource(resource)
+
+
+def check_job(job_name):
+    client = get_client()
+    job = bigquery.job._AsyncJob(job_name, client)
+    job.reload()
+    if job.state == 'DONE':
+        if job.error_result:
+            raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
+        logging.info(u'Job %s is done, errors: %s', job.error_result)
+    else:
+        logging.debug(u'Job %s not done: %s', job.name, job.state)
+        deferred.defer(check_job, job.name, _countdown=0)
 
 
 def upload_backup_file(filename):
@@ -76,13 +101,12 @@ def upload_backup_file(filename):
     job = create_job(filename)
     job.begin()
 
-    while True:
-        job.reload()
-        if job.state == 'DONE':
-            if job.error_result:
-                raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
-            break
-        time.sleep(5)  # ghetto polling
+    deferred.defer(check_job, job.name, _countdown=0)
+    # while True:
+    #     if check_job(job.name)
+    #             raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
+    #         break
+    #     time.sleep(5)  # ghetto polling
 
 
 class CronReplication(webapp2.RequestHandler):
@@ -94,13 +118,13 @@ class CronReplication(webapp2.RequestHandler):
         logging.info(u'searching backups in %r', bucketpath)
 
         logging.debug("bucketname: %s", list((obj.filename for obj in cloudstorage.listbucket(bucketpath, delimiter='/') if obj.is_dir)))
-        subdirs = sorted((obj.filename for obj in 
+        subdirs = sorted((obj.filename for obj in
             cloudstorage.listbucket(
                 bucketpath, delimiter='/') if obj.is_dir),
             reverse=True)
 
         # Find Path of newest available backup
-        # typical path: 
+        # typical path:
         # '/appengine-backups-eu-nearline/hudoraexpress/2017-05-02/ag9...EM.ArtikelBild.backup_info'
         regexp = re.compile(bucketpath + r'(\w+)\.(\w+)\.backup_info')
         datum, latestdatum, latestsubdir = None, None, None
