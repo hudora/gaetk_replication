@@ -56,8 +56,8 @@ def get_connection():
     The connection needs to be closed afterwards.
     """
     return rdbms.connect(
-        instance=replication.replication_config.SQL_INSTANCE_NAME,
-        database=replication.replication_config.SQL_DATABASE_NAME)
+        instance=replication_config.SQL_INSTANCE_NAME,
+        database=replication_config.SQL_DATABASE_NAME)
 
 
 class DatabaseCursor(object):
@@ -288,11 +288,11 @@ def replicate(table, kind, cursor, stats, **kwargs):
     # Adapt batch size. This could be further optimized in the future,
     # like adapting it to a ratio of size and MAXSIZE.
     size = get_listsize(entities)
-    if size * 2 < replication.replication_config.MAXSIZE:
-        stats['batch_size'] = int(min([replication.replication_config.MAXRECORDS, batch_size * 2]))
+    if size * 2 < replication_config.MAXSIZE:
+        stats['batch_size'] = int(min([replication_config.MAXRECORDS, batch_size * 2]))
         logging.info(u'increasing batch_size to %d', stats['batch_size'])
-    elif size > replication.replication_config.MAXSIZE:
-        stats['batch_size'] = int(min([replication.replication_config.MAXRECORDS, batch_size * 0.8]))
+    elif size > replication_config.MAXSIZE:
+        stats['batch_size'] = int(min([replication_config.MAXRECORDS, batch_size * 0.8]))
         logging.info(u'decreasing batch_size to %d', stats['batch_size'])
 
     stats['time'] += time.time() - start
@@ -310,7 +310,7 @@ class TaskReplication(webapp2.RequestHandler):
             key_name=kind,
             batch_size=self.request.get_range('batch_size', default=25, min_value=10))
         state.put()
-        taskqueue.add(queue_name=replication.replication_config.SQL_QUEUE_NAME,
+        taskqueue.add(queue_name=replication_config.SQL_QUEUE_NAME,
                       url=self.request.path,
                       params=dict(kind=kind))
         self.response.write('ok\n')
@@ -354,7 +354,7 @@ class TaskReplication(webapp2.RequestHandler):
             taskqueue.add(url=self.request.path,
                           params=stats,
                           name='{}-{}-{}'.format(kind, stats['records'], int(time.time())),
-                          queue_name=replication.replication_config.SQL_QUEUE_NAME,
+                          queue_name=replication_config.SQL_QUEUE_NAME,
                           countdown=5)
         else:
             state.done = True
@@ -375,7 +375,7 @@ class CronReplication(webapp2.RequestHandler):
         for index, kind in enumerate(models):
             if kind.startswith(('_', 'gaetk_')):
                 continue
-            elif kind in replication.replication_config.BLACKLIST:
+            elif kind in replication_config.BLACKLIST:
                 logging.info(u'Ignoring %s', kind)
                 continue
 
@@ -388,7 +388,7 @@ class CronReplication(webapp2.RequestHandler):
                 url='/gaetk_replication/cloudsql/worker/%s' % kind,
                 params=dict(kind=kind),
                 name='%s-%s' % (kind, int(time.time())),
-                queue_name=replication.replication_config.SQL_QUEUE_NAME,
+                queue_name=replication_config.SQL_QUEUE_NAME,
                 countdown=index * countdown)
 
         self.response.headers['Content-Type'] = 'text/plain'
