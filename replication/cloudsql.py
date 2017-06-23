@@ -19,26 +19,13 @@ import webapp2
 
 from google.appengine.api import datastore
 from google.appengine.api import datastore_types
-from google.appengine.api import lib_config
 from google.appengine.api import rdbms
 from google.appengine.api import taskqueue
 from google.appengine.api import users
 from google.appengine.datastore import datastore_query
 from google.appengine.ext import db
 
-
-# We want to avoid 'RequestTooLargeError' - the limit is 16 MB
-
-replication_config = lib_config.register(
-    'gaetk_replication',
-    dict(SQL_INSTANCE_NAME='*unset*',
-         SQL_DATABASE_NAME='*unset*',
-         SQL_QUEUE_NAME='default',
-         MAXSIZE=1536 * 1024,
-         MAXRECORDS=3000,
-         BLACKLIST=[],
-         )
-)
+from . import replication_config
 
 
 class MVCCColission(Exception):

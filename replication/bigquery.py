@@ -20,27 +20,14 @@ import time
 import cloudstorage
 import webapp2
 
-from google.appengine.api import lib_config
 from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
+from . import replication_config
 
-replication_config = lib_config.register(
-    'gaetk_replication',
-    dict(SQL_INSTANCE_NAME='*unset*',
-         SQL_DATABASE_NAME='*unset*',
-         SQL_QUEUE_NAME='default',
-         MAXSIZE=1536 * 1024,
-         MAXRECORDS=3000,
-         BLACKLIST=[],
-         BIGQUERY_PROJECT='project',
-         BIGQUERY_DATASET='dataset',
-         BIGQUERY_QUEUE_NAME='default',
-         GS_BUCKET='bucketname')
-)
 
 
 def create_job(filename):
