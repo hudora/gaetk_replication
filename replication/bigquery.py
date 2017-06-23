@@ -18,20 +18,32 @@ import re
 import time
 
 import cloudstorage
+import google.auth
+import google_auth_httplib2
+import httplib2
 import webapp2
 
 from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
+from google.cloud.credentials import get_credentials
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
-import replication
+from . import replication_config
+
+
+def get_client():
+    """BigQuery-Client erzeugen."""
+    credentials = google.auth.credentials.with_scopes_if_required(get_credentials(), bigquery.Client.SCOPE)
+    return bigquery.Client(
+        project=replication_config.BIGQUERY_PROJECT,
+        _http=google_auth_httplib2.AuthorizedHttp(credentials, httplib2.Http(timeout=60)))
 
 
 def create_job(filename):
     u"""Erzeuge Job zum Upload einer Datastore-Backup-Datei zu Google BigQuery"""
-    bigquery_client = bigquery.Client(project=replication.replication_config.BIGQUERY_PROJECT)
+    bigquery_client = get_client()
     tablename = filename.split('.')[-2]
     resource = {
         'configuration': {
@@ -42,19 +54,18 @@ def create_job(filename):
                     'tableId': tablename},
                 'maxBadRecords': 0,
                 'sourceUris': ['gs:/' + filename],
-                'projectionFields': []
+                'projectionFields': [],
+                'source_format': 'DATASTORE_BACKUP',
+                'write_disposition': 'WRITE_TRUNCATE',
             }
         },
         'jobReference': {
-            'projectId': 'huwawi2',
+            'projectId': replication_config.BIGQUERY_PROJECT,
             'jobId': 'import-{}-{}'.format(tablename, int(time.time()))
         }
     }
 
-    job = bigquery_client.job_from_resource(resource)
-    job.source_format = 'DATASTORE_BACKUP'
-    job.write_disposition = 'WRITE_TRUNCATE'
-    return job
+    return bigquery_client.job_from_resource(resource)
 
 
 def upload_backup_file(filename):
@@ -82,39 +93,34 @@ class CronReplication(webapp2.RequestHandler):
         bucketpath = '/'.join((replication.replication_config.GS_BUCKET, get_application_id())) + '/'
         logging.info(u'searching backups in %r', bucketpath)
 
-        subdirs = sorted((obj.filename for obj in
-            cloudstorage.listbucket(
-                bucketpath, delimiter='/') if obj.is_dir),
-            reverse=True)
-
+        objs = cloudstorage.listbucket(bucketpath, delimiter='/')
+        subdirs = sorted((obj.filename for obj in objs if obj.is_dir), reverse=True)
         # Find Path of newest available backup
         # typical path:
         # '/appengine-backups-eu-nearline/hudoraexpress/2017-05-02/ag9...EM.ArtikelBild.backup_info'
-        regexp = re.compile(bucketpath + r'(\w+)\.(\w+)\.backup_info')
-        datum, latestdatum, latestsubdir = None, None, None
         dirs = dict()
         for subdir in subdirs:
-            logging.debug(u'subdir: %s', subdir)
             datepart = subdir.rstrip('/').split('/')[-1]
-            logging.debug(u'datepart: %s', datepart)
-            datum = None
+            logging.debug(u'subdir: %s, datepart: %s', subdir, datepart)
             try:
                 datum = convert_to_date(subdir.rstrip('/').split('/')[-1])
             except ValueError:
                 continue
-            dirs[datum] = subdir
+            else:
+                dirs[datum] = subdir
 
         if not dirs:
             raise HTTP500_ServerError(u'No Datastore Backup found in %r' % bucketpath)
 
         datum = max(dirs)
-        subdir = dirs[datum]
-
         if datum < datetime.date.today() - datetime.timedelta(days=14):
             raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
 
         regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
         countdown = 1
+        subdir = dirs[datum]
+        logging.info(u'Uploading Backup %s from subdir', datum)
+        regexp = re.compile(subdir + r'([\w-]+)\.(\w+)\.backup_info')
         for obj in cloudstorage.listbucket(subdir):
             if regexp.match(obj.filename):
                 taskqueue.add(
@@ -131,7 +137,6 @@ class CronReplication(webapp2.RequestHandler):
         self.response.write('ok\n')
 
 
-# for the python 2.7 runtime application needs to be top-level
 application = webapp2.WSGIApplication([
     (r'^/gaetk_replication/bigquery/cron$', CronReplication),
 ], debug=True)

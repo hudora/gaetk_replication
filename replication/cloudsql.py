@@ -24,7 +24,7 @@ from google.appengine.api import users
 from google.appengine.datastore import datastore_query
 from google.appengine.ext import db
 
-import replication
+from . import replication_config
 
 
 class MVCCColission(Exception):
