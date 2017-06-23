@@ -113,8 +113,8 @@ class CronReplication(webapp2.RequestHandler):
         if datum < datetime.date.today() - datetime.timedelta(days=14):
             raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
         subdir = dirs[datum]
-
-        regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
+        logging.info(u'Uploading Backup %s from subdir', datum)
+        regexp = re.compile(subdir + r'([\w-]+)\.(\w+)\.backup_info')
         for obj in cloudstorage.listbucket(subdir):
             if regexp.match(obj.filename):
                 taskqueue.add(
