@@ -18,21 +18,32 @@ import re
 import time
 
 import cloudstorage
+import google.auth
+import google_auth_httplib2
+import httplib2
 import webapp2
 
 from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
+from google.cloud.credentials import get_credentials
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
 from . import replication_config
 
 
+def get_client():
+    """BigQuery-Client erzeugen."""
+    credentials = google.auth.credentials.with_scopes_if_required(get_credentials(), bigquery.Client.SCOPE)
+    return bigquery.Client(
+        project=replication_config.BIGQUERY_PROJECT,
+        _http=google_auth_httplib2.AuthorizedHttp(credentials, httplib2.Http(timeout=60)))
+
 
 def create_job(filename):
     u"""Erzeuge Job zum Upload einer Datastore-Backup-Datei zu Google BigQuery"""
-    bigquery_client = bigquery.Client(project=replication_config.BIGQUERY_PROJECT)
+    bigquery_client = get_client()
     tablename = filename.split('.')[-2]
     resource = {
         'configuration': {
@@ -43,19 +54,18 @@ def create_job(filename):
                     'tableId': tablename},
                 'maxBadRecords': 0,
                 'sourceUris': ['gs:/' + filename],
-                'projectionFields': []
+                'projectionFields': [],
+                'source_format': 'DATASTORE_BACKUP',
+                'write_disposition': 'WRITE_TRUNCATE',
             }
         },
         'jobReference': {
-            'projectId': 'huwawi2',
+            'projectId': replication_config.BIGQUERY_PROJECT,
             'jobId': 'import-{}-{}'.format(tablename, int(time.time()))
         }
     }
 
-    job = bigquery_client.job_from_resource(resource)
-    job.source_format = 'DATASTORE_BACKUP'
-    job.write_disposition = 'WRITE_TRUNCATE'
-    return job
+    return bigquery_client.job_from_resource(resource)
 
 
 def upload_backup_file(filename):
