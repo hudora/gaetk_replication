@@ -93,37 +93,29 @@ class CronReplication(webapp2.RequestHandler):
         bucketpath = '/'.join((replication_config.GS_BUCKET, get_application_id())) + '/'
         logging.info(u'searching backups in %r', bucketpath)
 
-        logging.debug("bucketname: %s", list((obj.filename for obj in cloudstorage.listbucket(bucketpath, delimiter='/') if obj.is_dir)))
-        subdirs = sorted((obj.filename for obj in 
-            cloudstorage.listbucket(
-                bucketpath, delimiter='/') if obj.is_dir),
-            reverse=True)
-
+        objs = cloudstorage.listbucket(bucketpath, delimiter='/')
+        subdirs = sorted((obj.filename for obj in objs if obj.is_dir), reverse=True)
         # Find Path of newest available backup
-        # typical path: 
+        # typical path:
         # '/appengine-backups-eu-nearline/hudoraexpress/2017-05-02/ag9...EM.ArtikelBild.backup_info'
-        regexp = re.compile(bucketpath + r'(\w+)\.(\w+)\.backup_info')
-        datum, latestdatum, latestsubdir = None, None, None
         dirs = dict()
         for subdir in subdirs:
-            logging.debug(u'subdir: %s', subdir)
             datepart = subdir.rstrip('/').split('/')[-1]
-            logging.debug(u'datepart: %s', datepart)
-            datum = None
+            logging.debug(u'subdir: %s, datepart: %s', subdir, datepart)
             try:
                 datum = convert_to_date(subdir.rstrip('/').split('/')[-1])
             except ValueError:
                 continue
-            dirs[datum] = subdir
+            else:
+                dirs[datum] = subdir
 
         if not dirs:
             raise HTTP500_ServerError(u'No Datastore Backup found in %r' % bucketpath)
 
         datum = max(dirs)
-        subdir = dirs[datum]
-
         if datum < datetime.date.today() - datetime.timedelta(days=14):
             raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
+        subdir = dirs[datum]
 
         regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
         for obj in cloudstorage.listbucket(subdir):
