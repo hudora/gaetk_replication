@@ -18,6 +18,7 @@ import re
 import time
 
 import cloudstorage
+import cs.gaetk_common
 import google.auth
 import google_auth_httplib2
 import httplib2
@@ -49,14 +50,12 @@ def create_job(filename):
         'configuration': {
             'load': {
                 'destinationTable': {
-                    'projectId': replication.replication_config.BIGQUERY_PROJECT,
-                    'datasetId': replication.replication_config.BIGQUERY_DATASET,
+                    'projectId': replication_config.BIGQUERY_PROJECT,
+                    'datasetId': replication_config.BIGQUERY_DATASET,
                     'tableId': tablename},
                 'maxBadRecords': 0,
                 'sourceUris': ['gs:/' + filename],
                 'projectionFields': [],
-                'source_format': 'DATASTORE_BACKUP',
-                'write_disposition': 'WRITE_TRUNCATE',
             }
         },
         'jobReference': {
@@ -65,7 +64,10 @@ def create_job(filename):
         }
     }
 
-    return bigquery_client.job_from_resource(resource)
+    job = bigquery_client.job_from_resource(resource)
+    job.source_format = 'DATASTORE_BACKUP'
+    job.write_disposition = 'WRITE_TRUNCATE'
+    return job
 
 
 def upload_backup_file(filename):
@@ -73,16 +75,15 @@ def upload_backup_file(filename):
     logging.info('uploading %r', filename)
     job = create_job(filename)
     job.begin()
-    logging.info("job %s", job)
 
     while True:
         job.reload()
         if job.state == 'DONE':
             if job.error_result:
                 raise HTTP500_ServerError(u'FAILED JOB, error_result: %s' % job.error_result)
-        logging.debug("waiting %s %s", job.state, job)
+            break
+        logging.debug("waiting for job in state %s", job.state)
         time.sleep(5)  # ghetto polling
-    logging.debug("done %s", job)
 
 
 class CronReplication(webapp2.RequestHandler):
@@ -90,7 +91,7 @@ class CronReplication(webapp2.RequestHandler):
 
     def get(self):
         u"""Regelmäßig von Cron aufzurufen."""
-        bucketpath = '/'.join((replication.replication_config.GS_BUCKET, get_application_id())) + '/'
+        bucketpath = '/'.join((replication_config.GS_BUCKET, get_application_id())) + '/'
         logging.info(u'searching backups in %r', bucketpath)
 
         objs = cloudstorage.listbucket(bucketpath, delimiter='/')
@@ -101,7 +102,6 @@ class CronReplication(webapp2.RequestHandler):
         dirs = dict()
         for subdir in subdirs:
             datepart = subdir.rstrip('/').split('/')[-1]
-            logging.debug(u'subdir: %s, datepart: %s', subdir, datepart)
             try:
                 datum = convert_to_date(subdir.rstrip('/').split('/')[-1])
             except ValueError:
@@ -116,17 +116,16 @@ class CronReplication(webapp2.RequestHandler):
         if datum < datetime.date.today() - datetime.timedelta(days=14):
             raise HTTP500_ServerError(u'Latest Datastore Backup in %r is way too old!' % bucketpath)
 
-        regexp = re.compile(subdir + r'(\w+)\.(\w+)\.backup_info')
         countdown = 1
         subdir = dirs[datum]
-        logging.info(u'Uploading Backup %s from subdir', datum)
+        logging.info(u'Uploading Backup %s from directory %s', datum, subdir)
         regexp = re.compile(subdir + r'([\w-]+)\.(\w+)\.backup_info')
         for obj in cloudstorage.listbucket(subdir):
             if regexp.match(obj.filename):
                 taskqueue.add(
                     url=self.request.path,
                     params={'filename': obj.filename},
-                    queue_name=replication.replication_config.BIGQUERY_QUEUE_NAME,
+                    queue_name=replication_config.BIGQUERY_QUEUE_NAME,
                     countdown=countdown)
                 countdown += 2
         self.response.write('ok, countdown=%d\n' % countdown)
@@ -137,6 +136,6 @@ class CronReplication(webapp2.RequestHandler):
         self.response.write('ok\n')
 
 
-application = webapp2.WSGIApplication([
+application = cs.gaetk_common.make_app([
     (r'^/gaetk_replication/bigquery/cron$', CronReplication),
-], debug=True)
+])
