@@ -28,6 +28,7 @@ from google.appengine.api import taskqueue
 from google.appengine.api.app_identity import get_application_id
 from google.cloud import bigquery
 from google.cloud.credentials import get_credentials
+from google.cloud.exceptions import Conflict
 from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
@@ -74,7 +75,10 @@ def upload_backup_file(filename):
     u"""Lade Datastore-Backup-Datei zu Google BigQuery"""
     logging.info('uploading %r', filename)
     job = create_job(filename)
-    job.begin()
+    try:
+        job.begin()
+    except google.cloud.exceptions.Conflict:
+        return
 
     while True:
         job.reload()
