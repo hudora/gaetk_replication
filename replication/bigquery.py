@@ -78,6 +78,7 @@ def upload_backup_file(filename):
     try:
         job.begin()
     except google.cloud.exceptions.Conflict:
+        logging.warn(u'Konflikt bei %s', job.name)
         return
 
     while True:
