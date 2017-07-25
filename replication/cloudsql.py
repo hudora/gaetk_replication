@@ -23,6 +23,7 @@ from google.appengine.api import taskqueue
 from google.appengine.api import users
 from google.appengine.datastore import datastore_query
 from google.appengine.ext import db
+from google.appengine.runtime import apiproxy_errors
 
 from . import get_all_datastore_kinds
 from . import replication_config
@@ -232,7 +233,7 @@ def entity_list_generator(iterable, table):
     except db.Timeout:
         logging.warning('datastore timeout')
         raise StopIteration
-    except Exception, msg:
+    except Exception as msg:
         logging.error(u'entity_list_generator: %r', msg, exc_info=True)
         raise StopIteration
 
@@ -242,6 +243,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
 
     start = time.time()
 
+    logging.debug(u'cursor: %s (%r)', type(cursor), cursor)
     if cursor:
         if isinstance(cursor, basestring):
             cursor = datastore_query.Cursor.from_websafe_string(cursor)
@@ -253,7 +255,7 @@ def replicate(table, kind, cursor, stats, **kwargs):
         for property_operator, value in kwargs['filters']:
             query[property_operator] = value
 
-    batch_size = stats.get('batch_size', 10)
+    batch_size = stats.get('batch_size', 1)
     query_iterator = query.Run(limit=batch_size, offset=0)
 
     entitydicts = entity_list_generator(query_iterator, table)
@@ -267,12 +269,16 @@ def replicate(table, kind, cursor, stats, **kwargs):
     # Even if a batch is larger, it's very likely not too large
     # for a single write call.
     try:
-        with DatabaseCursor() as cursor:
-            cursor.executemany(table.get_replace_statement(), entities)
+        with DatabaseCursor() as dbcursor:
+            dbcursor.executemany(table.get_replace_statement(), entities)
             stats['records'] += len(entities)
-    except (rdbms.InternalError, rdbms.IntegrityError), msg:
+    except (rdbms.InternalError, rdbms.IntegrityError) as msg:
         logging.warning(u'Caught RDBMS exception: %s', msg)
         raise
+    except apiproxy_errors.RequestTooLargeError:
+        logging.warn(u'Request too big: %s', get_listsize(entities))
+        stats['batch_size'] /= 10
+        return cursor
     except TypeError as exception:
         if 'not enough arguments' in str(exception):
             logging.debug(u'statement: %r', table.get_replace_statement(), exc_info=True)
