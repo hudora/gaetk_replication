@@ -16,6 +16,7 @@ import datetime
 import logging
 import re
 import time
+import warnings
 
 import cloudstorage
 import cs.gaetk_common
@@ -33,6 +34,12 @@ from huTools.calendar.formats import convert_to_date
 from webob.exc import HTTPServerError as HTTP500_ServerError
 
 from . import replication_config
+
+
+warnings.warn(
+    ('gaetk_replication/replication/bigquery is no longer supported.'
+     ' Use http://appengine-toolkit2.readthedocs.io/en/latest/backupreplication.html'),
+    DeprecationWarning, stacklevel=1)
 
 
 def get_client():

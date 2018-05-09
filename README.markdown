@@ -1,7 +1,11 @@
 gaetk_replication
 =================
 
-Automates replication from AppEngine to CloudSQL, CloudStorage or S3
+Automates replication from AppEngine to CloudSQL
+
+For BigQuery functionality use
+http://appengine-toolkit2.readthedocs.io/en/latest/backupreplication.html
+
 
 Usage: CloudSQL
 ---------------
